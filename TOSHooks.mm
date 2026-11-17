@@ -670,7 +670,7 @@ static void *InlineHook(void *target, void *replacement, void **trampoline) {
     uintptr_t t = (uintptr_t)target;
 
     // 1. 分配可执行跳板
-    mach_vm_address_t code = 0;
+    vm_address_t code = 0;              // vm_allocate 要 vm_address_t，不是 mach_vm_address_t
     kern_return_t kr = vm_allocate(mach_task_self(), &code, PAGE_SIZE, VM_FLAGS_ANYWHERE);
     if (kr != KERN_SUCCESS) { NSLog(@"[XG] 跳板分配失败"); return NULL; }
 
@@ -781,4 +781,106 @@ int XGInstallInlineHooks(void) {
     snprintf(g_callMsg, sizeof(g_callMsg), "inline hook 装了 %d 个", n);
     NSLog(@"[XG] %s", g_callMsg);
     return n;
+}
+
+
+// ============================================================================
+//  v20：跳关（真正复刻社区一直用的方法）
+//
+//  社区文献（神魔之塔 6.x~7.x 教程）明确写了：
+//    「关卡值就是总共几关，像轮回 50 关；跳关值就是你在第几关，最明显在 2/50、5/50」
+//    「把关卡值改为 1 → 打一关就胜利；或改跳关值 7/7 → 下一回合就胜利」
+//
+//  所以完全不需要碰敌人血量：只要把「当前关」这个整数改成「总关数」，
+//  游戏的进度判断会认为你已经打到最后一关，下一回合即过关。
+//
+//  这两个数都是 1~50 的小整数，特征极强：
+//    在内存里找 int32 == 当前关，且它附近 ±0x60 内存在 int32 == 总关。
+// ============================================================================
+
+static volatile int g_skipHits = 0;
+static volatile int g_skipChanged = 0;
+static char g_skipMsg[256] = "未执行跳关";
+
+int  XGSkipHits(void)     { return g_skipHits; }
+int  XGSkipChanged(void)  { return g_skipChanged; }
+const char *XGSkipMessage(void) { return g_skipMsg; }
+
+static BOOL plausibleInt(int32_t v, int lo, int hi) { return v >= lo && v <= hi; }
+
+// 在 [p-0x60, p+0x60] 范围内找 int32 == total
+static BOOL nearbyHas(const uint8_t *buf, size_t got, size_t off, int32_t total, int32_t *whereOut) {
+    ssize_t lo = (ssize_t)off - 0x60;
+    ssize_t hi = (ssize_t)off + 0x60;
+    for (ssize_t q = lo; q <= hi; q += 4) {
+        if (q < 0) continue;
+        if (q + 4 > (ssize_t)got) break;
+        if (q == (ssize_t)off) continue;
+        int32_t v;
+        memcpy(&v, buf + q, 4);
+        if (v == total) { if (whereOut) *whereOut = (int32_t)(q - off); return YES; }
+    }
+    return NO;
+}
+
+// 核心：扫描 + 改写
+void XGSkipStageAsync(void) {
+    if (g_state == 1) return;
+    g_state = 1;
+    snprintf(g_skipMsg, sizeof(g_skipMsg), "跳关扫描中…");
+
+    int32_t cur   = (int32_t)XG.conf.stageCurrent;   // 当前第几关
+    int32_t total = (int32_t)XG.conf.stageTotal;     // 总共几关
+    if (cur <= 0 || total <= 0) { cur = 1; total = 7; }
+    if (cur >= total) { snprintf(g_skipMsg, sizeof(g_skipMsg), "当前关(%d) >= 总关(%d)，先改参数", cur, total); g_state = 3; return; }
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool {
+            uint8_t *buf = (uint8_t *)malloc(CHUNK);
+            if (!buf) { snprintf(g_skipMsg, sizeof(g_skipMsg), "内存不足"); g_state = 3; return; }
+
+            CFTimeInterval t0 = CFAbsoluteTimeGetCurrent();
+            int hits = 0, changed = 0;
+            char firstFew[160] = {0};
+
+            for (uintptr_t p = SCAN_START; p + CHUNK < SCAN_END; p += CHUNK) {
+                if (CFAbsoluteTimeGetCurrent() - t0 > TIME_BUDGET) break;
+                vm_size_t got = 0;
+                if (vm_read_overwrite(mach_task_self(), (vm_address_t)p, (vm_size_t)CHUNK,
+                                      (vm_address_t)buf, &got) != KERN_SUCCESS || got < 0x100) continue;
+
+                for (size_t off = 0; off + 8 < (size_t)got; off += 4) {
+                    int32_t v;
+                    memcpy(&v, buf + off, 4);
+                    if (v != cur) continue;
+                    int32_t delta = 0;
+                    if (!nearbyHas(buf, got, off, total, &delta)) continue;
+
+                    hits++;
+                    uintptr_t addr = p + off;
+                    if (hits <= 4 && strlen(firstFew) < 120) {
+                        char t[40];
+                        snprintf(t, sizeof(t), "0x%lx(+%d) ", (unsigned long)addr, delta);
+                        strncat(firstFew, t, sizeof(firstFew) - strlen(firstFew) - 1);
+                    }
+                    // 把「当前关」改成「总关」→ 游戏认为已打到最后一关
+                    int32_t nv = total;
+                    if (SafeWrite(addr, &nv, 4)) changed++;
+                }
+            }
+            free(buf);
+
+            g_skipHits = hits;
+            g_skipChanged = changed;
+            g_state = 2;
+            if (hits == 0) {
+                snprintf(g_skipMsg, sizeof(g_skipMsg),
+                         "没找到 %d/%d 这对数值（换个关卡或先打一关再试）", cur, total);
+            } else {
+                snprintf(g_skipMsg, sizeof(g_skipMsg),
+                         "命中 %d 处，已改 %d 处 → %d/%d", hits, changed, total, total);
+            }
+            NSLog(@"[XG] 跳关: %s  样本: %s", g_skipMsg, firstFew);
+        }
+    });
 }
