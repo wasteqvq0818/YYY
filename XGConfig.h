@@ -122,6 +122,8 @@ void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_in
 
 // dump 游戏的 NSUserDefaults（XiuGou 可能走的是改 plist/偏好这条路）
 // hook 血量 getter：让游戏每次读血量都拿到 0
+void XGDieCallAsync(void);     // 走游戏死亡流程（直接调 methodPointer）
+const char *XGDieCallMsg(void);
 void XGAutoStart(void);        // 开自动过关：进战斗自动清空敌人
 void XGAutoStop(void);
 int  XGAutoActive(void);
