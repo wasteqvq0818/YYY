@@ -169,13 +169,13 @@ void XGFastWinSetSpeed(float mult) {
     FWBind();
     if (!g_fwReady || !fw_static_data) return;
 
-    Il2CppClass *t = fw_class_from_name(fw_domain_get(), "UnityEngine", "Time");
+    Il2CppClass *t = XGI2Class("Time");   // 按类名遍历查找，避免 class_from_name 的 Image/Domain 参数坑
     if (!t) return;
     void *sd = fw_static_data(t);
     if (!sd) return;
 
-    uint32_t off = (uint32_t)(uintptr_t)fw_field_offset(t, "timeScale");
-    if (!off) return;
+    uint32_t off = XGI2FieldOffOfClass((void *)t, "timeScale");
+    if (!off) { NSLog(@"[XG-FW] timeScale 偏移没取到"); return; }
     if (mult < 0.1f) mult = 0.1f;
     if (mult > 20.0f) mult = 20.0f;
     FWWrite((uintptr_t)sd + off, &mult, sizeof(mult));
