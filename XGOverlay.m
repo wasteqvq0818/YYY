@@ -148,12 +148,11 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0];
         c.detailTextLabel.text = @"在战斗界面点这个：扫内存找敌人，血量归零";
     } else if (ip.row == 1) {
-        BOOL on = XGHPHookInstalled() != 0;
-        c.textLabel.text = on ? @"🔨 血量归零Hook：已装（点此卸载）"
-                              : @"🔨 装血量归零 Hook（推荐）";
+        BOOL on = XGDeadHookInstalled() != 0;
+        c.textLabel.text = on ? @"🔨 Hook 已装（点此卸载）" : @"🔨 装 Hook（血量+死亡判定）";
         c.textLabel.textColor = on ? [UIColor colorWithRed:0.4 green:0.95 blue:0.5 alpha:1.0]
                                    : [UIColor colorWithRed:1.0 green:0.6 blue:0.3 alpha:1.0];
-        c.detailTextLabel.text = @"改 EnemyData.set_mCurrentHP 的函数指针，敌人血量恒为 0";
+        c.detailTextLabel.text = @"改 MethodInfo 指针：HP 恒 0 + isDead 恒 true + CheckDie 恒 true";
     } else if (ip.row == 2) {
         c.textLabel.text = @"🏆 直接触发胜利（可能崩）";
         c.textLabel.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.3 alpha:1.0];
@@ -180,10 +179,11 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
-        if (XGHPHookInstalled()) {
-            XGRemoveHPHook();
+        if (XGDeadHookInstalled()) {
+            XGRemoveDeadHook();
         } else {
-            XGInstallHPHook();
+            XGResetCounters();
+            XGInstallDeadHook();
         }
         [self refreshHeader];
         [tv reloadData];
