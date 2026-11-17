@@ -39,10 +39,10 @@
 // ============================================================================
 static BOOL XGRead(uintptr_t addr, void *out, size_t len) {
     if (!addr || !out) return NO;
-    mach_vm_size_t got = 0;
-    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr,
-                                              (mach_vm_size_t)len,
-                                              (mach_vm_address_t)out, &got);
+    vm_size_t got = 0;
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr,
+                                        (vm_size_t)len,
+                                        (vm_address_t)out, (vm_size_t *)&got);
     return kr == KERN_SUCCESS && got == len;
 }
 
@@ -192,11 +192,11 @@ static int XGKillAllViaList(void) {
         uintptr_t page = (ent + XG_OFF_ENEMY_HP) & ~(PAGE_SIZE - 1);
         vm_protect(mach_task_self(), (vm_address_t)page, PAGE_SIZE,
                    FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-        mach_vm_write(mach_task_self(), (vm_address_t)(ent + XG_OFF_ENEMY_HP),
+        vm_write(mach_task_self(), (vm_address_t)(ent + XG_OFF_ENEMY_HP),
                       (vm_offset_t)&zero, sizeof(zero));
         if (XG_OFF_ENEMY_ALIVE) {
             int8_t a = 0;
-            mach_vm_write(mach_task_self(), (vm_address_t)(ent + XG_OFF_ENEMY_ALIVE),
+            vm_write(mach_task_self(), (vm_address_t)(ent + XG_OFF_ENEMY_ALIVE),
                           (vm_offset_t)&a, sizeof(a));
         }
         killed++;
