@@ -155,7 +155,7 @@ static void XGPlayPath(const TOSSolution *sol, int stepMs) {
 
 static void XGAutoSolveOnce(BOOL dryRun) {
     TOSBoard b;
-    if (!XGReadBoard(&b)) { NSLog(@"[XG] 盘面读取失败（检查 XG_BOARD_ARRAY_OFF / g_boardRoot）"); return; }
+    if (!XGReadBoard(&b)) { NSLog(@"[XG] 盘面读取失败（Puzzle 实例或 _puzzleGems 没拿到）"); return; }
 
     TOSSolution sol;
     if (!tos_solve(&b, XG.conf.maxSteps, XG.conf.solveBudgetMs, &sol, 1)) {
@@ -314,20 +314,8 @@ static CFAbsoluteTime g_lastWin = 0;
 static CFAbsoluteTime g_lastSettle = 0;
 
 static void XGResolveRoots(void) {
-    // 盘面/战斗对象：优先用配置里的静态偏移，其次尝试常见的单例类
-    uintptr_t base = XGImageBase("UnityFramework");
-    if (!base) base = XGImageBase("ProductName");
-    if (!base) return;
-
-    if (!g_battleRoot && XG_BATTLE_ROOT_PTR_OFF) {
-        g_battleRoot = XGReadV<uintptr_t>(base + XG_BATTLE_ROOT_PTR_OFF);
-    }
-    // 盘面对象：BoardMainView / PuzzleView 的实例
-    if (!g_boardRoot) {
-        void *b = XGI2Instance("BoardMainView");
-        if (!b) b = XGI2Instance("PuzzleView");
-        if (b) g_boardRoot = (uintptr_t)b;
-    }
+    // 新架构：实例全部运行期按类名 + 静态字段拿，不再有硬编码的映像偏移
+    if (!g_puzzle) (void)XGPuzzle();
 }
 
 static void XGTick(void) {
