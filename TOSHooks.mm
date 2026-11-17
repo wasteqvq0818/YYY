@@ -330,15 +330,19 @@ static void XGBoot(void) {
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            // 字段探测（面板开关打开时，把关键类的字段/偏移全打进日志）
-            if (XG.on[F_DEBUG_PROBE]) {
-                NSLog(@"[XG] === 字段探测开始 ===");
-                XGI2ProbeConfigured();
-                int bytes = XGI2ProbeToFile(NULL);
-                NSLog(@"[XG] === 字段探测完成：%d 字节，文件在 /var/mobile/Documents/XG_probe.txt ===", bytes);
-            }
-
+            // 先把 UI 装上（保证悬浮球一定能出来，不被后面的重活影响）
             [XGOverlay install];
+
+            // 字段探测：必须在后台队列跑。上次放主线程把游戏启动卡死了。
+            if (XG.on[F_DEBUG_PROBE]) {
+                NSLog(@"[XG] === 字段探测已排队（后台线程）===");
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                    @autoreleasepool {
+                        int bytes = XGI2ProbeToFile(NULL);
+                        NSLog(@"[XG] === 字段探测完成：%d 字节 ===", bytes);
+                    }
+                });
+            }
 
             g_tickTimer = [NSTimer scheduledTimerWithTimeInterval:0.35
                                                           repeats:YES
