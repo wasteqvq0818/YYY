@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // ============================================================================
 //  神魔之塔（Tower of Saviors）盘面模型与自动转珠求解器
 //  盘面：6 列 × 5 行 = 30 格，索引 idx = y * 6 + x
@@ -43,4 +47,8 @@ void tos_dump(const TOSBoard *b);
 
 const char *tos_attr_name(int a);
 
+#endif
+
+#ifdef __cplusplus
+}
 #endif
