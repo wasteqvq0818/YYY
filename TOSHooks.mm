@@ -260,6 +260,26 @@ void XGScanAsync(void) {
     });
 }
 
+// 方法名扫描（找游戏自己的胜利/结算/死亡函数）
+void XGScanMethodsAsync(void) {
+    snprintf(g_msg, sizeof(g_msg), "扫描方法名中…（约 20~60 秒）");
+    g_state = 1;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // il2cpp 遍历必须在主线程
+        if (!XGI2Init()) { snprintf(g_msg, sizeof(g_msg), "il2cpp 未就绪"); g_state = 3; return; }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            @autoreleasepool {
+                int n = XGI2ProbeMethods(NULL);
+                snprintf(g_msg, sizeof(g_msg),
+                         n > 0 ? "方法扫描完成，命中 %d 个 → Documents/XG_methods.txt"
+                               : "方法扫描完成，没命中，检查关键词",
+                         n);
+                g_state = 2;
+            }
+        });
+    });
+}
+
 int XGSolvePreview(char *out, int cap) {
     XGScanAsync();
     if (out) snprintf(out, cap, "已开始（最多 15 秒）\n完成后点「刷新状态」");
