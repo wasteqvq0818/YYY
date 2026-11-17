@@ -93,8 +93,8 @@ static UIWindow *XGHostWindow(void) {
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
 
     const char *sm = XGScanMessage();
-    NSString *text = [NSString stringWithFormat:@"%@\n调用计数：HPsetter %d｜isDead %d｜CheckDie %d\n%@",
-        stateLine, XGCntCurHP(), XGCntIsDead(), XGCntCheckDie(),
+    NSString *text = [NSString stringWithFormat:@"%@\n计数：HP %d｜isDead %d｜CheckDie %d｜验证 %d\n%@",
+        stateLine, XGCntCurHP(), XGCntIsDead(), XGCntCheckDie(), XGCntVerify(),
         (sm && sm[0]) ? [NSString stringWithUTF8String:sm] : @""];
 
     UIFont *font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
