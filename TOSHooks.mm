@@ -1160,36 +1160,41 @@ void XGZeroBattleZoneAsync(void) {
             uintptr_t sdata = (uintptr_t)XGI2StaticData(XG_LAB_CLASS);
             DLog("③ static data = 0x%lx", (unsigned long)sdata);
 
-            // 关两个阻止开关
-            uintptr_t blkDieSlot = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
-            uintptr_t blkBarSlot = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockChangeHPBar");
+            // 关两个阻止开关（用运行时 API 直接读取静态字段值）
             int disarmed = 0;
-            if (blkDieSlot) { uintptr_t mb = 0; if (SafeRead(blkDieSlot, &mb, 8) && mb > 0x10000) { DisarmManagedBool(mb); disarmed++; } }
-            if (blkBarSlot) { uintptr_t mb = 0; if (SafeRead(blkBarSlot, &mb, 8) && mb > 0x10000) { DisarmManagedBool(mb); disarmed++; } }
-
-            // 战场敌人列表
-            uintptr_t slot = XGI2StaticFieldPtr(XG_LAB_CLASS, "BattleZoneEnemy");
-            DLog("④ BattleZoneEnemy slot = 0x%lx  (blockDie slot=0x%lx)",
-                 (unsigned long)slot, (unsigned long)blkDieSlot);
-            if (!slot) {
-                snprintf(g_zbMsg, sizeof(g_zbMsg),
-                         "③拿不到 BattleZoneEnemy 字段（sdata=0x%lx）", (unsigned long)sdata);
-                g_state = 3; return;
+            uintptr_t mbDie = 0, mbBar = 0;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEnemyDie", &mbDie, 8) && mbDie > 0x10000) {
+                DisarmManagedBool(mbDie); disarmed++;
             }
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockChangeHPBar", &mbBar, 8) && mbBar > 0x10000) {
+                DisarmManagedBool(mbBar); disarmed++;
+            }
+            DLog("④ blockDie=0x%lx blockBar=0x%lx (disarmed=%d)",
+                 (unsigned long)mbDie, (unsigned long)mbBar, disarmed);
 
+            // 战场敌人列表 —— 走 il2cpp_field_static_get_value，运行时代为处理基址+偏移
             uintptr_t list = 0;
-            if (!SafeRead(slot, &list, 8) || list < 0x10000) {
-                DLog("④ 列表为空 list=0x%lx", (unsigned long)list);
-                snprintf(g_zbMsg, sizeof(g_zbMsg),
-                         "④列表为空 slot=0x%lx list=0x%lx（确认在战斗里）",
-                         (unsigned long)slot, (unsigned long)list);
+            bool got = XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8);
+            size_t offBZ = XGI2FieldOffset(XG_LAB_CLASS, "BattleZoneEnemy");
+            DLog("⑤ 取 BattleZoneEnemy: ok=%d list=0x%lx  fieldOffset=0x%zx",
+                 (int)got, (unsigned long)list, offBZ);
+
+            if (!got) {
+                snprintf(g_zbMsg, sizeof(g_zbMsg), "③读不到 BattleZoneEnemy 字段");
                 g_state = 3; return;
             }
+            if (list < 0x10000) {
+                snprintf(g_zbMsg, sizeof(g_zbMsg),
+                         "④列表为空 list=0x%lx（确认在战斗里）", (unsigned long)list);
+                g_state = 3; return;
+            }
+            uintptr_t slot = 0;   // 后面 dump 用，置 0 表示不再是字段地址
 
             uintptr_t items = 0;
             int32_t   count = 0;
             SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
             SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
+            DLog("⑥ List: items=0x%lx count=%d", (unsigned long)items, count);
 
             // ---- 详细诊断：看清 slot / list 的真实结构 ----
             DLog("---- 原始内存 ----");
