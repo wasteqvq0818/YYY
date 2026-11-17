@@ -1313,8 +1313,7 @@ void XGKillBattleZoneAsync(void) {
     g_killChanged = 0;
     g_killRan = 1;
     snprintf(g_killMsg, sizeof(g_killMsg), "执行中…");
-    DLog("
-===== 清血v29 %s =====", [[NSDate date] description].UTF8String);
+    DLog("\n===== 清血v29 %s =====", [[NSDate date] description].UTF8String);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
