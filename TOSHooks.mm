@@ -297,3 +297,116 @@ static void XGBoot(void) {
         });
     }
 }
+
+
+// ============================================================================
+//  调用式实现（学 XiuGou：不写内存，直接调用游戏自己的方法）
+//
+//  依据 XG_methods.txt 实测：
+//    EnemyInstance.Die 有两个重载（argc 0 / 1）
+//    Labyrinth.Victory / Victory2 / CheckEndBattleZone / GameOver 构成完整战斗流程
+// ============================================================================
+static char g_callMsg[256] = "未调用";
+const char *XGLastCallResult(void) { return g_callMsg; }
+
+// 收集场上 EnemyInstance 实例地址（最多 64 个）
+#define MAX_INST 64
+static int CollectInstances(void *kInst, uintptr_t *out, int maxN) {
+    if (!kInst || !out) return 0;
+    uint8_t *buf = (uint8_t *)malloc(CHUNK);
+    if (!buf) return 0;
+
+    int n = 0;
+    CFTimeInterval t0 = CFAbsoluteTimeGetCurrent();
+
+    for (uintptr_t p = SCAN_START; p + CHUNK < SCAN_END && n < maxN; p += CHUNK) {
+        if (CFAbsoluteTimeGetCurrent() - t0 > TIME_BUDGET) break;
+        vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)p, (vm_size_t)CHUNK,
+                              (vm_address_t)buf, &got) != KERN_SUCCESS || got < 0x100) continue;
+        for (size_t off = 0; off + 0x100 < (size_t)got && n < maxN; off += 8) {
+            if (*(void **)(buf + off) == kInst) out[n++] = p + off;
+        }
+    }
+    free(buf);
+    return n;
+}
+
+// ---- 方案 A：对每个 EnemyInstance 调 Die() ----
+void XGCallDieAsync(void) {
+    if (g_state == 1) return;
+    g_state = 1;
+    snprintf(g_msg, sizeof(g_msg), "调用 Die 中…");
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!XGI2Init()) { snprintf(g_msg, sizeof(g_msg), "il2cpp 未就绪"); g_state = 3; return; }
+        void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+        void *mDie0 = XGI2Method(XG_ENEMY_INSTANCE_CLASS, XG_DIE_METHOD, 0);
+        void *mDie1 = XGI2Method(XG_ENEMY_INSTANCE_CLASS, XG_DIE_METHOD, 1);
+        NSLog(@"[XG] klass=%p Die/0=%p Die/1=%p", kInst, mDie0, mDie1);
+
+        if (!kInst || (!mDie0 && !mDie1)) {
+            snprintf(g_msg, sizeof(g_msg), "Die 方法没找到（klass=%p m0=%p m1=%p）", kInst, mDie0, mDie1);
+            g_state = 3;
+            return;
+        }
+
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            static uintptr_t insts[MAX_INST];
+            int n = CollectInstances(kInst, insts, MAX_INST);
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                int ok = 0, fail = 0;
+                for (int i = 0; i < n; i++) {
+                    void *exc = NULL;
+                    void *arg = (void *)1;          // 有些 Die(bool) 需要参数
+                    void **params = mDie1 ? (void *[]){ &arg } : NULL;
+                    void *m = mDie1 ? mDie1 : mDie0;
+                    XGI2Invoke(m, (void *)insts[i], params, &exc);
+                    if (exc) fail++; else ok++;
+                }
+                snprintf(g_msg, sizeof(g_msg), "找到 %d 个敌人，Die 成功 %d / 失败 %d", n, ok, fail);
+                snprintf(g_callMsg, sizeof(g_callMsg), "%s", g_msg);
+                g_state = 2;
+            });
+        });
+    });
+}
+
+// ---- 方案 B：直接调 Labyrinth.Victory() ----
+void XGForceVictoryAsync(void) {
+    if (g_state == 1) return;
+    g_state = 1;
+    snprintf(g_msg, sizeof(g_msg), "调用 Victory 中…");
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!XGI2Init()) { snprintf(g_msg, sizeof(g_msg), "il2cpp 未就绪"); g_state = 3; return; }
+
+        void *inst = XGI2GetInstanceMulti(XG_BATTLE_CTRL_CLASS);
+        void *mV = XGI2Method(XG_BATTLE_CTRL_CLASS, XG_VICTORY_METHOD, 0);
+        void *mV2 = XGI2Method(XG_BATTLE_CTRL_CLASS, XG_VICTORY2_METHOD, 0);
+        NSLog(@"[XG] Labyrinth inst=%p Victory=%p Victory2=%p", inst, mV, mV2);
+
+        if (!inst) {
+            snprintf(g_msg, sizeof(g_msg), "拿不到 Labyrinth 实例（可能不在战斗中）");
+            g_state = 3;
+            return;
+        }
+        void *m = mV ? mV : mV2;
+        if (!m) {
+            snprintf(g_msg, sizeof(g_msg), "Victory 方法没找到");
+            g_state = 3;
+            return;
+        }
+        void *exc = NULL;
+        XGI2Invoke(m, inst, NULL, &exc);
+        if (exc) {
+            snprintf(g_msg, sizeof(g_msg), "Victory 调用抛异常");
+            g_state = 3;
+        } else {
+            snprintf(g_msg, sizeof(g_msg), "已调用 %s.Victory()", XG_BATTLE_CTRL_CLASS);
+            g_state = 2;
+        }
+        snprintf(g_callMsg, sizeof(g_callMsg), "%s", g_msg);
+    });
+}
