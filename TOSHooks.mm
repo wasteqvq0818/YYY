@@ -89,6 +89,54 @@ const char *XGSampleInfo(void) {
 #define SCAN_END     0x500000000ULL       // 20GB 止
 #define TIME_BUDGET  15.0
 
+
+// ============================================================================
+//  对象内存 dump —— 把对象原始字节写到文件，人工判断真实字段位置
+//  （探测出来的 offset 有重复，说明静态/实例字段混在一起，不能直接信）
+// ============================================================================
+static void XGDumpObject(uintptr_t obj, int isInst, int idx) {
+    static FILE *df = NULL;
+    static int inited = 0;
+    if (!inited) {
+        inited = 1;
+        NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSArray *cands = @[@"/var/mobile/Documents/XG_dump.txt",
+                           docs ? [docs stringByAppendingPathComponent:@"XG_dump.txt"] : @"/tmp/XG_dump.txt",
+                           [NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_dump.txt"]];
+        for (NSString *pth in cands) {
+            [[NSFileManager defaultManager] createDirectoryAtPath:[pth stringByDeletingLastPathComponent]
+                                      withIntermediateDirectories:YES attributes:nil error:nil];
+            df = fopen(pth.UTF8String, "a");
+            if (df) { NSLog(@"[XG] dump -> %@", pth); break; }
+        }
+        if (df) {
+            fprintf(df, "\n\n===== XiuGou 对象 dump %s =====\n", [[NSDate date] description].UTF8String);
+        }
+    }
+    if (!df) return;
+
+    uint8_t raw[0x100];
+    memset(raw, 0, sizeof(raw));
+    if (!SafeRead(obj, raw, sizeof(raw))) {
+        fprintf(df, "\n[%s #%d] 0x%lx 读取失败\n", isInst ? "Inst" : "Data", idx, (unsigned long)obj);
+        return;
+    }
+
+    fprintf(df, "\n[%s #%d] 0x%lx\n", isInst ? "Inst" : "Data", idx, (unsigned long)obj);
+    for (int r = 0; r < 0x100; r += 16) {
+        fprintf(df, "  +0x%02x: ", r);
+        for (int c = 0; c < 16; c++) fprintf(df, "%02x ", raw[r + c]);
+        fprintf(df, " | i32: ");
+        for (int c = 0; c < 16; c += 4) {
+            int32_t v;
+            memcpy(&v, raw + r + c, 4);
+            fprintf(df, "%d ", v);
+        }
+        fprintf(df, "\n");
+    }
+    fflush(df);
+}
+
 static void ScanWithKlass(void *kData, void *kInst) {
     uint8_t *buf = (uint8_t *)malloc(CHUNK);
     if (!buf) { snprintf(g_msg, sizeof(g_msg), "内存不足"); g_state = 3; return; }
@@ -116,6 +164,10 @@ static void ScanWithKlass(void *kData, void *kInst) {
 
             uintptr_t o = p + off;
             if (isData) nData++; else nInst++;
+
+            // 诊断：dump 前 3 个对象的内存（0x80 字节），供人工判断真实字段
+            if (isData && nData <= 3) XGDumpObject(o, 0, nData);
+            if (isInst && nInst <= 3) XGDumpObject(o, 1, nInst);
 
             if (isData) {
                 int32_t dead = R32(o + XG_OFF_ENEMY_DEAD);
@@ -148,7 +200,7 @@ static void ScanWithKlass(void *kData, void *kInst) {
     g_state = 2;
 
     snprintf(g_msg, sizeof(g_msg),
-             "块 %d/%d｜Data %d｜Inst %d｜改动 %d",
+             "块 %d/%d｜Data %d｜Inst %d｜改动 %d\n样本已 dump 到 Documents/XG_dump.txt",
              okBlocks, totalBlocks, nData, nInst, killed);
     NSLog(@"[XG] %s", g_msg);
     for (int i = 0; i < g_sampleN; i++) {
