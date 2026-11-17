@@ -168,8 +168,8 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.text = @"⚡ 扫描并清场（旧，可能崩）";
         c.detailTextLabel.text = @"按旧偏移改，可能命中历史对象";
     } else if (ip.row == 4) {
-        c.textLabel.text = @"⚠️ 调方法（已禁用，会闪退）";
-        c.detailTextLabel.text = @"il2cpp_runtime_invoke 在此游戏会崩，仅留作说明";
+        c.textLabel.text = @"📋 导出游戏偏好设置（plist）";
+        c.detailTextLabel.text = @"看 MH_CACHE_GAMEPLAY_DATA_* —— XiuGou 可能改的就是这个";
     } else {
         c.textLabel.text = @"🔄 刷新状态";
         c.detailTextLabel.text = @"扫描是后台跑的，状态不会自动刷";
@@ -220,8 +220,10 @@ static UIWindow *XGHostWindow(void) {
         XGScanAsync();
         [self refreshHeader];
     } else if (ip.row == 4) {
-        // 已禁用：il2cpp_runtime_invoke 会导致闪退
+        XGDumpPrefsAsync();
         [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
     } else {
         [self refreshHeader]; [tv reloadData];
     }
