@@ -646,3 +646,139 @@ void XGRemoveDeadHook(void) {
     g_listN = 0;
     g_deadHookOn = 0;
 }
+
+// ============================================================================
+//  v19：ARM64 inline hook
+//
+//  v18 的验证计数（UpdateRound）也是 0，说明改 MethodInfo->methodPointer
+//  这条路根本无效 —— IL2CPP 把方法 AOT 编译成固定机器码，调用是直接 call，
+//  不查 MethodInfo。只有反射/接口/虚调用才走指针。
+//
+//  所以只能改函数开头那条指令本身：
+//      原始: ldrb w0,[x0,#0x90] / ret ...
+//      改写: ldr x16,#8 ; br x16 ; <replacement>
+//  原前 4 条指令搬到可执行跳板，末尾跳回 target+16，保证 orig 可用。
+// ============================================================================
+
+#define HOOK_STUB_SIZE   64
+
+// 装一个 inline hook。trampoline 返回跳板地址（调用它等于调用原函数）
+static void *InlineHook(void *target, void *replacement, void **trampoline) {
+    if (!target || !replacement) return NULL;
+    if (trampoline) *trampoline = NULL;
+
+    uintptr_t t = (uintptr_t)target;
+
+    // 1. 分配可执行跳板
+    mach_vm_address_t code = 0;
+    kern_return_t kr = vm_allocate(mach_task_self(), &code, PAGE_SIZE, VM_FLAGS_ANYWHERE);
+    if (kr != KERN_SUCCESS) { NSLog(@"[XG] 跳板分配失败"); return NULL; }
+
+    // 2. 拷原前 16 字节（4 条指令）
+    uint8_t orig16[16];
+    if (!SafeRead(t, orig16, 16)) { NSLog(@"[XG] 读原指令失败"); return NULL; }
+    memcpy((void *)code, orig16, 16);
+
+    // 3. 跳板末尾：跳回 target+16
+    uint32_t *stub = (uint32_t *)(code + 16);
+    stub[0] = 0x58000050;                 // ldr x16, #8
+    stub[1] = 0xD61F0200;                 // br  x16
+    *(uint64_t *)(code + 24) = (uint64_t)(t + 16);
+
+    // 4. 让跳板可执行
+    vm_protect(mach_task_self(), code, PAGE_SIZE, FALSE,
+               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+
+    // 5. 改写目标函数开头
+    uint8_t patch[16];
+    uint32_t *pi = (uint32_t *)patch;
+    pi[0] = 0x58000050;                   // ldr x16, #8
+    pi[1] = 0xD61F0200;                   // br  x16
+    *(uint64_t *)(patch + 8) = (uint64_t)replacement;
+
+    if (!SafeWrite(t, patch, 16)) {
+        NSLog(@"[XG] patch 失败 @0x%lx", (unsigned long)t);
+        vm_deallocate(mach_task_self(), code, PAGE_SIZE);
+        return NULL;
+    }
+    // 确保指令缓存同步（ARM64 必须）
+    __builtin___clear_cache((char *)t, (char *)t + 16);
+
+    if (trampoline) *trampoline = (void *)code;
+    NSLog(@"[XG] inline hook 成功: 0x%lx -> %p (跳板 %p)",
+          (unsigned long)t, replacement, (void *)code);
+    return (void *)code;
+}
+
+// ---- 目标函数 ----
+static void *g_trampIsDead  = NULL;
+static void *g_trampCheckDie = NULL;
+static void *g_trampCurHP   = NULL;
+static void *g_trampVerify  = NULL;
+static int   g_inlineN      = 0;
+
+static volatile int g_icIsDead = 0, g_icCheckDie = 0, g_icCurHP = 0, g_icVerify = 0;
+
+int XGCntIsDead2(void)   { return g_icIsDead; }
+int XGCntCheckDie2(void) { return g_icCheckDie; }
+int XGCntCurHP2(void)    { return g_icCurHP; }
+int XGCntVerify2(void)   { return g_icVerify; }
+int XGInlineCount(void)  { return g_inlineN; }
+
+// get_isDead：永远 true
+static uint8_t ih_get_isDead(void *self) {
+    g_icIsDead++;
+    return 1;
+}
+static uint8_t ih_CheckDie(void *self) {
+    g_icCheckDie++;
+    return 1;
+}
+// set_mCurrentHP(self, int64 value)：一律设 0，再转原逻辑
+static void ih_setCurrentHP(void *self, int64_t value) {
+    g_icCurHP++;
+    if (g_trampCurHP) ((void (*)(void *, int64_t))g_trampCurHP)(self, 0);
+}
+// 验证：UpdateRound 计数后转原逻辑
+static void ih_verify(void *self) {
+    g_icVerify++;
+    if (g_trampVerify) ((void (*)(void *))g_trampVerify)(self);
+}
+
+int XGInstallInlineHooks(void) {
+    if (!XGI2Init()) { snprintf(g_callMsg, sizeof(g_callMsg), "il2cpp 未就绪"); return 0; }
+
+    g_icIsDead = g_icCheckDie = g_icCurHP = g_icVerify = 0;
+    int n = 0;
+
+    // 所有 EnemyData 副本的 set_mCurrentHP
+    void *classes[MAX_SAME];
+    int nc = XGI2FindAllClasses(XG_ENEMY_CLASS, classes, MAX_SAME);
+    for (int i = 0; i < nc; i++) {
+        void *mi = XGI2MethodInfoOfClass(classes[i], "set_mCurrentHP", 1);
+        if (!mi) continue;
+        void *fn = *(void **)mi;
+        if (InlineHook(fn, (void *)ih_setCurrentHP, &g_trampCurHP)) n++;
+    }
+
+    // 所有 EnemyInstance 副本的 get_isDead / CheckDie / UpdateRound
+    nc = XGI2FindAllClasses(XG_ENEMY_INSTANCE_CLASS, classes, MAX_SAME);
+    for (int i = 0; i < nc; i++) {
+        void *mi;
+        mi = XGI2MethodInfoOfClass(classes[i], "get_isDead", 0);
+        if (mi) { if (InlineHook(*(void **)mi, (void *)ih_get_isDead, &g_trampIsDead)) n++; }
+
+        mi = XGI2MethodInfoOfClass(classes[i], "CheckDie", 0);
+        if (mi) { if (InlineHook(*(void **)mi, (void *)ih_CheckDie, &g_trampCheckDie)) n++; }
+
+        mi = XGI2MethodInfoOfClass(classes[i], "UpdateRound", 0);
+        if (!mi) mi = XGI2MethodInfoOfClass(classes[i], "UpdateRoundDisplay", 0);
+        if (mi) { if (InlineHook(*(void **)mi, (void *)ih_verify, &g_trampVerify)) n++; }
+    }
+
+    g_inlineN = n;
+    g_deadHookOn = (n > 0);
+    snprintf(g_callMsg, sizeof(g_callMsg), "inline hook 装了 %d 个", n);
+    NSLog(@"[XG] %s", g_callMsg);
+    return n;
+}
