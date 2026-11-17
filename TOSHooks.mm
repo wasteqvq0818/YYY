@@ -2390,3 +2390,84 @@ void XGKillAllStop(void) {
     if (g_killTimer) { [g_killTimer invalidate]; g_killTimer = nil; }
     DLog("[连杀] 停止，共处理 %d 个", g_killCount);
 }
+
+
+// ============================================================================
+//  v39 · 直接胜利 = 调 Labyrinth.Victory()
+//
+//  dump.cs 实测：
+//    Labyrinth.Victory()          RVA 0x2FD939C   无参无返回值
+//    Labyrinth.Victory2()         RVA 0x2FEB0B0
+//    Labyrinth.EndBattleZone()    RVA 0x2FD8A9C
+//    EnemyInstance.mLab @0x30     public static Labyrinth  ← 拿实例就靠它
+//
+//  之前「杀敌人过关」只是清场，不是快速胜利：还得一波波打。
+//  Victory() 才是游戏自己的结算入口 —— 调它就直接进胜利流程。
+//
+//  调用方式已被 v37 验证安全（methodPointer 直调，不经过 runtime_invoke）。
+// ============================================================================
+
+static char g_victoryMsg[256] = "未执行";
+const char *XGVictoryMsg(void) { return g_victoryMsg; }
+
+void XGForceVictoryNow(void) {
+    snprintf(g_victoryMsg, sizeof(g_victoryMsg), "执行中…");
+    DLog("\n===== 直接胜利 %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_victoryMsg, sizeof(g_victoryMsg), "il2cpp 未就绪"); return; }
+
+            // 1. 拿 Labyrinth 实例（EnemyInstance.mLab 是静态字段）
+            uintptr_t lab = 0;
+            BOOL got = XGI2StaticFieldValue(XG_ENEMY_INSTANCE_CLASS, "mLab", &lab, 8);
+            DLog("Labyrinth 实例: ok=%d lab=0x%lx", (int)got, (unsigned long)lab);
+
+            if (!lab || lab < 0x10000) {
+                // 备用：扫一下类里的静态字段，或者用 BattleZoneEnemy 里敌人的 mLab
+                uintptr_t list = 0;
+                if (XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) && list > 0x10000) {
+                    uintptr_t items = 0; int32_t cnt = 0;
+                    SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+                    SafeRead(list + XG_ACC_LIST_SIZE, &cnt, 4);
+                    if (items && cnt > 0) {
+                        uintptr_t inst = 0;
+                        if (SafeRead(items + XG_ACC_ARRAY_DATA, &inst, 8) && inst > 0x10000) {
+                            SafeRead(inst + 0x30, &lab, 8);   // 实例上的 mLab? 不，mLab 是 static
+                        }
+                    }
+                }
+            }
+
+            if (!lab || lab < 0x10000) {
+                snprintf(g_victoryMsg, sizeof(g_victoryMsg), "拿不到 Labyrinth 实例（mLab 为空）");
+                DLog("%s", g_victoryMsg);
+                return;
+            }
+
+            // 2. 拿 Victory 方法指针
+            void *mpV1 = XGI2Method(XG_LAB_CLASS, "Victory", 0);
+            void *mpV2 = XGI2Method(XG_LAB_CLASS, "Victory2", 0);
+            void *mpEnd = XGI2Method(XG_LAB_CLASS, "EndBattleZone", 0);
+            DLog("Victory()=%p Victory2()=%p EndBattleZone()=%p", mpV1, mpV2, mpEnd);
+
+            if (!mpV1 && !mpV2) {
+                snprintf(g_victoryMsg, sizeof(g_victoryMsg), "Victory 方法没拿到");
+                DLog("%s", g_victoryMsg);
+                return;
+            }
+
+            // 3. 直接调用（methodPointer，不经 runtime_invoke）
+            void *mp = mpV1 ? mpV1 : mpV2;
+            DLog("调用 %s(0x%lx) @ %p", mpV1 ? "Victory" : "Victory2",
+                 (unsigned long)lab, mp);
+            ((void (*)(void *))mp)((void *)lab);
+            DLog("调用返回");
+
+            snprintf(g_victoryMsg, sizeof(g_victoryMsg), "已调用 %s → 应立即结算",
+                     mpV1 ? "Labyrinth.Victory()" : "Labyrinth.Victory2()");
+            DLog("结果: %s", g_victoryMsg);
+            NSLog(@"[XG] %s", g_victoryMsg);
+        }
+    });
+}
