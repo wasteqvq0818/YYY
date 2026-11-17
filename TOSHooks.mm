@@ -293,9 +293,35 @@ static void XGTick(void) {
 // ============================================================================
 //  6. 入口（替代 Logos 的 %ctor）
 // ============================================================================
+// 加载标记：写到多个位置，任一成功即可证明 dylib 被成功注入
+static void XGWriteLoadedFlag(void) {
+    NSString *bundle = [[NSBundle mainBundle] bundleIdentifier] ?: @"?";
+    NSString *line = [NSString stringWithFormat:
+        @"XiuGou.dylib loaded\ntime=%@\nbundle=%@\npid=%d\nuid=%d\n",
+        [NSDate date], bundle, getpid(), getuid()];
+
+    NSMutableArray *paths = [NSMutableArray array];
+    [paths addObject:@"/var/mobile/Documents/XG_loaded.txt"];
+    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    if (docs) [paths addObject:[docs stringByAppendingPathComponent:@"XG_loaded.txt"]];
+    [paths addObject:[NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_loaded.txt"]];
+
+    for (NSString *p in paths) {
+        NSString *dir = [p stringByDeletingLastPathComponent];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        if ([line writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+            NSLog(@"[XG] 加载标记写入 %@", p);
+            return;
+        }
+    }
+    NSLog(@"[XG] 加载标记写入失败（沙箱限制）");
+}
+
 __attribute__((constructor))
 static void XGBoot(void) {
     @autoreleasepool {
+        XGWriteLoadedFlag();
         NSLog(@"[XG] ===== XiuGou.dylib 加载 =====");
         NSLog(@"[XG] 目标: %@ pid=%d", [[NSBundle mainBundle] bundleIdentifier], getpid());
 
