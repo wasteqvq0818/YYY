@@ -410,3 +410,87 @@ void XGForceVictoryAsync(void) {
         snprintf(g_callMsg, sizeof(g_callMsg), "%s", g_msg);
     });
 }
+
+
+// ============================================================================
+//  血量归零 Hook（v15 · 学 XiuGou 的思路，但不写游戏数据）
+//
+//  原理：IL2CPP 的 MethodInfo 首字段就是函数指针。
+//        把它改成我们的函数 = 完成 hook，不用改代码段、不用可执行内存、
+//        不用处理 ARM64 指令重定位。原函数完好，照常转调。
+//
+//  目标（来自 XG_methods.txt 实测）：
+//    EnemyData.set_mCurrentHP @ 0x115b9670c
+//    EnemyData.set_mMaxHP     @ 0x115b966f8
+//
+//  效果：游戏每次给敌人设血量（含初始化），都被改成 0 → 敌人立刻死。
+//        走的是游戏自己的流程，不存在「改了数据但不生效」的问题。
+// ============================================================================
+
+static void   *g_miCurHP = NULL;      // MethodInfo*
+static void   *g_miMaxHP = NULL;
+static void   *g_origCurHP = NULL;    // 原始函数指针
+static void   *g_origMaxHP = NULL;
+static int     g_hpHookOn = 0;
+
+int XGHPHookInstalled(void) { return g_hpHookOn; }
+
+// set_mCurrentHP(int64 value) —— arm64 传参 x0=this, x1=value
+static void my_setCurrentHP(void *self, int64_t value) {
+    if (g_origCurHP) {
+        ((void (*)(void *, int64_t))g_origCurHP)(self, 0);   // 一律设成 0
+    }
+}
+
+// set_mMaxHP(int64 value)
+static void my_setMaxHP(void *self, int64_t value) {
+    if (g_origMaxHP) {
+        ((void (*)(void *, int64_t))g_origMaxHP)(self, 1);   // 最大值设成 1（保险）
+    }
+}
+
+int XGInstallHPHook(void) {
+    if (g_hpHookOn) return 1;
+    if (!XGI2Init()) { snprintf(g_callMsg, sizeof(g_callMsg), "il2cpp 未就绪"); return 0; }
+
+    g_miCurHP = XGI2MethodInfo(XG_ENEMY_CLASS, "set_mCurrentHP", 1);
+    g_miMaxHP = XGI2MethodInfo(XG_ENEMY_CLASS, "set_mMaxHP", 1);
+    NSLog(@"[XG] MethodInfo: set_mCurrentHP=%p set_mMaxHP=%p", g_miCurHP, g_miMaxHP);
+
+    if (!g_miCurHP && !g_miMaxHP) {
+        snprintf(g_callMsg, sizeof(g_callMsg), "两个 setter 都没找到");
+        return 0;
+    }
+
+    int n = 0;
+    if (g_miCurHP) {
+        void **slot = (void **)g_miCurHP;          // 首字段 = methodPointer
+        g_origCurHP = *slot;
+        void *repl = (void *)my_setCurrentHP;
+        if (SafeWrite((uintptr_t)slot, &repl, sizeof(repl))) n++;
+        else NSLog(@"[XG] set_mCurrentHP 写入失败");
+    }
+    if (g_miMaxHP) {
+        void **slot = (void **)g_miMaxHP;
+        g_origMaxHP = *slot;
+        void *repl = (void *)my_setMaxHP;
+        if (SafeWrite((uintptr_t)slot, &repl, sizeof(repl))) n++;
+        else NSLog(@"[XG] set_mMaxHP 写入失败");
+    }
+
+    g_hpHookOn = (n > 0);
+    snprintf(g_callMsg, sizeof(g_callMsg),
+             g_hpHookOn ? "Hook 已装：%d 个 setter（进战斗后敌人血量恒为 0）"
+                        : "Hook 安装失败");
+    NSLog(@"[XG] %s (origCur=%p origMax=%p)", g_callMsg, g_origCurHP, g_origMaxHP);
+    return g_hpHookOn;
+}
+
+void XGRemoveHPHook(void) {
+    if (!g_hpHookOn) return;
+    if (g_miCurHP && g_origCurHP) SafeWrite((uintptr_t)g_miCurHP, &g_origCurHP, 8);
+    if (g_miMaxHP && g_origMaxHP) SafeWrite((uintptr_t)g_miMaxHP, &g_origMaxHP, 8);
+    g_hpHookOn = 0;
+    snprintf(g_callMsg, sizeof(g_callMsg), "Hook 已卸载");
+    NSLog(@"[XG] Hook 已卸载");
+}
