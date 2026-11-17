@@ -29,6 +29,13 @@ extern "C" {
 #define XG_OFF_EI_DEAD           0x90     // _isDead
 #define XG_OFF_EI_PREDICT_HP     0x38     // predictHP（血条显示值）
 
+// ---- 方法名（来自 XG_methods.txt 全量方法扫描，46,963 类 / 226,963 方法）----
+#define XG_BATTLE_CTRL_CLASS     "Labyrinth"        // 战斗控制器（有 Victory/GameOver/CheckEndBattleZone）
+#define XG_VICTORY_METHOD        "Victory"          // 直接触发胜利
+#define XG_VICTORY2_METHOD       "Victory2"
+#define XG_DIE_METHOD            "Die"              // EnemyInstance 的死亡方法
+#define XG_CHECKEND_METHOD       "CheckEndBattleZone"
+
 // ---- 功能开关（只剩一个）----
 typedef enum {
     F_FAST_WIN = 0,     // 直接胜利
@@ -59,6 +66,9 @@ const char *XGFeatureName(XGFeature f);
 // 避免 XGOverlay.m(C) 与 TOSHooks.mm(ObjC++) 之间符号名不匹配）
 void XGScanAsync(void);
 void XGScanMethodsAsync(void);   // 扫描方法名（找胜利/结算函数）
+void XGCallDieAsync(void);       // 对场上所有敌人调用 Die()
+void XGForceVictoryAsync(void);  // 直接调用 Labyrinth.Victory()
+const char *XGLastCallResult(void);
 int  XGScanState(void);
 const char *XGScanMessage(void);
 int  XGLastKillCount(void);
