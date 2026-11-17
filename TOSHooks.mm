@@ -1092,18 +1092,18 @@ void XGZeroBattleZoneAsync(void) {
             if (!lab) { snprintf(g_zbMsg, sizeof(g_zbMsg), "找不到 Labyrinth 类"); g_state = 3; return; }
 
             // 1. 关掉两个「阻止」开关（可能正是敌人不死的原因）
-            void *blkDie = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
-            void *blkBar = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockChangeHPBar");
-            if (blkDie) { uintptr_t mb = 0; if (SafeRead((uintptr_t)blkDie, &mb, 8)) DisarmManagedBool(mb); }
-            if (blkBar) { uintptr_t mb = 0; if (SafeRead((uintptr_t)blkBar, &mb, 8)) DisarmManagedBool(mb); }
+            uintptr_t blkDie = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
+            uintptr_t blkBar = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockChangeHPBar");
+            if (blkDie) { uintptr_t mb = 0; if (SafeRead(blkDie, &mb, 8)) DisarmManagedBool(mb); }
+            if (blkBar) { uintptr_t mb = 0; if (SafeRead(blkBar, &mb, 8)) DisarmManagedBool(mb); }
             NSLog(@"[XG] 已关 IsBlockEnemyDie/IsBlockChangeHPBar");
 
             // 2. 读 BattleZoneEnemy 列表
-            void *slot = XGI2StaticFieldPtr(XG_LAB_CLASS, "BattleZoneEnemy");
+            uintptr_t slot = XGI2StaticFieldPtr(XG_LAB_CLASS, "BattleZoneEnemy");
             if (!slot) { snprintf(g_zbMsg, sizeof(g_zbMsg), "拿不到 BattleZoneEnemy 字段"); g_state = 3; return; }
 
             uintptr_t list = 0;
-            if (!SafeRead((uintptr_t)slot, &list, 8) || list < 0x10000) {
+            if (!SafeRead(slot, &list, 8) || list < 0x10000) {
                 snprintf(g_zbMsg, sizeof(g_zbMsg), "BattleZoneEnemy 为空（不在战斗中）");
                 g_state = 3;
                 return;
