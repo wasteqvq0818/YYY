@@ -1096,6 +1096,29 @@ static void DLog(const char *fmt, ...) {
     fflush(g_diagF);
 }
 
+static void DumpMem(uintptr_t addr, int len, const char *tag) {
+    uint8_t buf[256];
+    if (len > (int)sizeof(buf)) len = (int)sizeof(buf);
+    if (!SafeRead(addr, buf, (size_t)len)) {
+        DLog("%s @0x%lx 读取失败", tag, (unsigned long)addr);
+        return;
+    }
+    DLog("%s @0x%lx:", tag, (unsigned long)addr);
+    for (int r = 0; r < len; r += 16) {
+        char hex[80] = {0}, nums[80] = {0}, t[12];
+        for (int c = 0; c < 16 && r + c < len; c++) {
+            snprintf(t, sizeof(t), "%02x ", buf[r + c]);
+            strncat(hex, t, sizeof(hex) - strlen(hex) - 1);
+        }
+        for (int c = 0; c + 3 < 16 && r + c + 3 < len; c += 4) {
+            int32_t v; memcpy(&v, buf + r + c, 4);
+            snprintf(t, sizeof(t), "%d ", v);
+            strncat(nums, t, sizeof(nums) - strlen(nums) - 1);
+        }
+        DLog("  +0x%02x: %-48s | %s", r, hex, nums);
+    }
+}
+
 static void DisarmManagedBool(uintptr_t mb) {
     if (!mb || mb < 0x10000) return;
     uint8_t f = 0;
@@ -1167,6 +1190,29 @@ void XGZeroBattleZoneAsync(void) {
             int32_t   count = 0;
             SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
             SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
+
+            // ---- 详细诊断：看清 slot / list 的真实结构 ----
+            DLog("---- 原始内存 ----");
+            DumpMem(slot - 0x20, 0x40, "slot-0x20");
+            DumpMem(list, 0x40, "list");
+
+            void *listKlass = ReadKlass(list);
+            const char *cname = XGI2ClassName(listKlass);
+            const char *cns   = XGI2ClassNamespace(listKlass);
+            DLog("list klass=%p  ns=%s  name=%s", listKlass, cns ? cns : "?", cname ? cname : "?");
+
+            // 尝试几种可能的 List 布局
+            uintptr_t it = 0; int32_t sz = 0;
+            if (SafeRead(list + 0x10, &it, 8) && SafeRead(list + 0x18, &sz, 4))
+                DLog("  布局A items@0x10 size@0x18 -> items=0x%lx size=%d", (unsigned long)it, sz);
+            if (SafeRead(list + 0x08, &it, 8) && SafeRead(list + 0x10, &sz, 4))
+                DLog("  布局B items@0x08 size@0x10 -> items=0x%lx size=%d", (unsigned long)it, sz);
+            if (SafeRead(list + 0x00, &it, 8) && SafeRead(list + 0x08, &sz, 4))
+                DLog("  布局C items@0x00 size@0x08 -> items=0x%lx size=%d", (unsigned long)it, sz);
+            // 数组式：直接看 list 本身是不是 Il2CppArray
+            int32_t arrLen = 0;
+            if (SafeRead(list + 0x18, &arrLen, 4))
+                DLog("  若 list 是数组: max_length@0x18 = %d", arrLen);
 
             if (!items || count <= 0 || count > 64) {
                 DLog("⑤ list=0x%lx items=0x%lx count=%d", (unsigned long)list, (unsigned long)items, count);
