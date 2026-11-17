@@ -39,7 +39,7 @@
 static BOOL SafeRead(uintptr_t addr, void *out, size_t len) {
     if (!addr || !out || len == 0) return NO;
     if (addr < 0x10000000ULL) return NO;                 // 低地址肯定不是对象
-    mach_vm_size_t got = 0;
+    vm_size_t got = 0;
     kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr,
                                          (vm_size_t)len, (vm_address_t)out,
                                          (vm_size_t *)&got);
@@ -80,18 +80,19 @@ typedef struct {
 
 /// 收集所有「可读写、非可执行」的堆区域（栈/代码段/映射文件都跳过）
 static int CollectHeap(vm_address_t *out, size_t maxN) {
-    mach_vm_address_t addr = 0;
+    // iOS 用户态不暴露 mach_vm_* 系列，用 vm_region_64（vm_address_t/vm_size_t）
+    vm_address_t addr = 0;
     int n = 0;
     while (n < (int)maxN) {
-        mach_vm_size_t size = 0;
+        vm_size_t size = 0;
         vm_region_basic_info_data_64_t info;
         mach_port_t object_name = MACH_PORT_NULL;
         mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
 
-        kern_return_t kr = mach_vm_region(mach_task_self(), &addr, &size,
-                                          VM_REGION_BASIC_INFO_64,
-                                          (vm_region_info_t)&info, &count,
-                                          &object_name);
+        kern_return_t kr = vm_region_64(mach_task_self(), &addr, &size,
+                                        VM_REGION_BASIC_INFO_64,
+                                        (vm_region_info_t)&info, &count,
+                                        &object_name);
         if (kr != KERN_SUCCESS) break;
 
         BOOL readable = (info.protection & VM_PROT_READ) != 0;
@@ -140,7 +141,7 @@ static int ScanAndKillEnemies(void) {
             if (p + want > end) want = (size_t)(end - p);
             if (want < 0x40) break;
 
-            mach_vm_size_t got = 0;
+            vm_size_t got = 0;
             kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)p,
                                                  (vm_size_t)want, (vm_address_t)buf,
                                                  (vm_size_t *)&got);
