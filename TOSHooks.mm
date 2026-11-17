@@ -333,8 +333,9 @@ static void XGBoot(void) {
             // 先把 UI 装上（保证悬浮球一定能出来，不被后面的重活影响）
             [XGOverlay install];
 
-            // 字段探测：必须在后台队列跑。上次放主线程把游戏启动卡死了。
-            if (XG.on[F_DEBUG_PROBE]) {
+            // 字段探测：无条件跑（当前阶段最需要的数据，不依赖开关是否保存成功）
+            // 必须在后台队列 —— 放主线程会卡死游戏启动。
+            {
                 NSLog(@"[XG] === 字段探测已排队（后台线程）===");
                 dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                     @autoreleasepool {
