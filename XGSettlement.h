@@ -1,8 +1,14 @@
 #ifndef XG_SETTLEMENT_H
 #define XG_SETTLEMENT_H
 
+
+
 #import <Foundation/Foundation.h>
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // ============================================================================
 //  结算伪造模块（XiuGou 的核心手法）
@@ -75,4 +81,8 @@ NSString *XGSettlementDescribe(const XGSettleReport *r);
 // 安装（幂等）
 void XGSettlementInstall(void);
 
+
+#ifdef __cplusplus
+}
+#endif
 #endif
