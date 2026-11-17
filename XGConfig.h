@@ -48,6 +48,25 @@ extern "C" {
 #define XG_ACC_DATA_EXISTS        0x18
 #define XG_ACC_DECIMAL_SIZE       16
 
+// ---- Labyrinth 的静态字段（dump.cs 行 32134 起，全部 static）----
+//      Labyrinth.BattleZoneEnemy      @0xE0  List<EnemyInstance>  ← 当前战场敌人
+//      Labyrinth.totalBattleZoneEnemy @0xE8  int
+//      Labyrinth.IsBlockEnemyDie      @0x68  ManagedBool          ← 阻止敌人死亡
+//      Labyrinth.IsBlockChangeHPBar   @0x88  ManagedBool
+//      List<T>: _items@0x10  _size@0x18
+//      Il2CppArray: 数据区@0x20
+//      ManagedBool: _oriValue@0x10  _keys@0x18（isTrue = _keys.Count>0）
+#define XG_LAB_CLASS               "Labyrinth"
+#define XG_ACC_LAB_BATTLEZONE      0xE0
+#define XG_ACC_LAB_TOTAL           0xE8
+#define XG_ACC_LAB_BLOCK_DIE       0x68
+#define XG_ACC_LAB_BLOCK_HPBAR     0x88
+#define XG_ACC_LIST_ITEMS          0x10
+#define XG_ACC_LIST_SIZE           0x18
+#define XG_ACC_ARRAY_DATA          0x20
+#define XG_ACC_MB_ORIVALUE         0x10
+#define XG_ACC_MB_KEYS             0x18
+
 // ---- 方法名（来自 XG_methods.txt 全量方法扫描，46,963 类 / 226,963 方法）----
 #define XG_BATTLE_CTRL_CLASS     "Labyrinth"        // 战斗控制器（有 Victory/GameOver/CheckEndBattleZone）
 #define XG_VICTORY_METHOD        "Victory"          // 直接触发胜利
@@ -99,6 +118,10 @@ int  XGInstallDeadHook(void);
 void XGRemoveDeadHook(void);
 int  XGDeadHookInstalled(void);
 int  XGInstallInlineHooks(void);
+void XGZeroBattleZoneAsync(void);   // 终版：走 Labyrinth.BattleZoneEnemy 静态链
+int  XGZBHits(void);
+int  XGZBChanged(void);
+const char *XGZBMessage(void);
 void XGZeroEnemiesAsync(void);   // 精确清血（走 EnemyInstance.mData 链）
 int  XGZeroHits(void);
 int  XGZeroChanged(void);
