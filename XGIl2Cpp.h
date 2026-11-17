@@ -1,9 +1,15 @@
 #ifndef XG_IL2CPP_H
 #define XG_IL2CPP_H
 
+
+
 #import <Foundation/Foundation.h>
 #include <stdint.h>
 #include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // ============================================================================
 //  IL2CPP 导航层 —— 按「类名」找类，不需要 namespace、不需要 RVA
@@ -56,4 +62,8 @@ int XGI2DumpClassNames(const char *path);
 // 最近一次失败原因
 const char *XGI2LastError(void);
 
+
+#ifdef __cplusplus
+}
+#endif
 #endif
