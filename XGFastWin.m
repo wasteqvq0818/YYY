@@ -96,30 +96,9 @@ static void FWWriteI8(uintptr_t addr, int8_t v)   { FWWrite(addr, &v, sizeof(v))
 //  这是检测面最小的一条路。
 // ============================================================================
 int XGFastWinKillAll(void) {
-    uintptr_t base = FWImageBase();
-    if (!base) return 0;
-
-    uintptr_t battle = FWPtr(base + XG_BATTLE_ROOT_PTR_OFF);
-    if (!battle) return 0;
-
-    uintptr_t list = FWPtr(battle + XG_OFF_ENEMY_LIST);
-    if (!list) return 0;
-
-    uintptr_t items = FWPtr(list + 0x10);
-    int32_t   n     = FWI32(list + 0x18);
-    if (!items || n <= 0 || n > 64) return 0;      // 合法性闸：布局不对直接放弃
-
-    uintptr_t data = items + 0x20;
-    int killed = 0;
-    for (int i = 0; i < n; i++) {
-        uintptr_t ent = FWPtr(data + (uintptr_t)i * sizeof(uintptr_t));
-        if (!ent) continue;
-        FWWriteI32(ent + XG_OFF_ENEMY_HP, 0);
-        if (XG_OFF_ENEMY_ALIVE) FWWriteI8(ent + XG_OFF_ENEMY_ALIVE, 0);
-        killed++;
-    }
-    if (killed) NSLog(@"[XG-FW] cleared %d enemies", killed);
-    return killed;
+    // 清场逻辑已迁移到 TOSHooks.mm 的 XGKillAllEnemies()
+    // 那边走的是实测链路 WaveData._enemies → EnemyData.currentHP
+    return 0;
 }
 
 // ============================================================================
