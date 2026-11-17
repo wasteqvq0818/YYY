@@ -121,6 +121,10 @@ int  XGInstallInlineHooks(void);
 void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_invoke）
 
 // dump 游戏的 NSUserDefaults（XiuGou 可能走的是改 plist/偏好这条路）
+void XGPatchCacheAsync(void);      // 改 RESTORE_CACHE 里的敌人 hp（XiuGou 的做法）
+int  XGPatchEnemyCount(void);
+const char *XGPatchMsg(void);
+void XGRestoreCacheAsync(void);    // 只读：解析并显示缓存内容
 void XGDumpPrefsAsync(void);
 const char *XGDumpPrefsMsg(void);
 int  XGCallOk(void);
