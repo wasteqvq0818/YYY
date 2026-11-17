@@ -1,159 +1,114 @@
-name: build-xiugou
+name: build-dylib
 
-# 触发：push 到任何分支，或在网页上手动点 Run workflow
+# TrollStore 环境：不需要 Substrate / 越狱 → 不需要 theos 打包 .deb
+# 直接用 clang 交叉编译出 XiuGou.dylib，再用"巨魔注入器"（TrollFools 类）注入游戏
+#
+# 触发：push 到任何分支，或网页上点 Run workflow
+
 on:
   push:
   workflow_dispatch:
 
 jobs:
   build:
-    # 用 Ubuntu 而不是 macOS：
-    #   macOS runner 按 10 倍扣免费额度，免费账户容易直接拿不到 runner（表现为秒 cancelled、steps=0）
-    #   Linux 上 theos 交叉编译 iOS tweak 是成熟路线，额度充足
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # 越狱类型不确定就两个都编
-          - scheme: rootful
-            pkg_scheme: ''
-          - scheme: rootless
-            pkg_scheme: 'rootless'
 
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装编译依赖
+      - name: 安装交叉编译工具链
         run: |
           set -e
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            clang lld llvm make git curl xz-utils libtinfo6 libncurses6 fakeroot \
-            libplist-utils
+            clang lld llvm make git curl xz-utils
+          echo "--- clang ---"
           clang --version | head -1
-          ld64.lld --version 2>/dev/null | head -1 || echo "ld64.lld 未就绪（theos 会用自带链接器）"
+          echo "--- 链接器 ---"
+          which ld64.lld ld.lld || true
 
-      - name: 缓存 theos
+      - name: 缓存 iOS SDK
         uses: actions/cache@v4
         with:
-          path: |
-            ~/theos
-          key: theos-linux-${{ runner.os }}-v4
+          path: ~/sdks
+          key: ios-sdk-16.5-v1
 
-      - name: 安装 Theos
+      - name: 下载 iOS SDK
         run: |
           set -e
-          if [ ! -d "$HOME/theos" ]; then
-            git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
-          fi
-          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          echo "$HOME/theos/bin" >> "$GITHUB_PATH"
-          ls "$HOME/theos"
-
-      - name: 伪装 iOS 工具链（用系统 clang）
-        run: |
-          set -e
-          # theos 在 Linux 上硬编码查找 $THEOS/toolchain/linux/iphone/bin/clang
-          # 新版 theos 不再分发 toolchain，所以把系统 clang/llvm 符号链过去
-          TC="$HOME/theos/toolchain/linux/iphone/bin"
-          mkdir -p "$TC"
-          install_one() {
-            dst="$TC/$1"; src="$2"
-            if [ -x "$src" ]; then ln -sf "$src" "$dst"; else echo "缺 $src"; fi
-          }
-          install_one clang        "$(command -v clang)"
-          install_one clang++      "$(command -v clang++)"
-          install_one as           "$(command -v clang)"
-          install_one ld           "$(command -v ld64.lld || command -v ld.lld)"
-          install_one ar           "$(command -v llvm-ar)"
-          install_one ranlib       "$(command -v llvm-ranlib)"
-          install_one nm           "$(command -v llvm-nm)"
-          install_one strip        "$(command -v llvm-strip)"
-          install_one objcopy      "$(command -v llvm-objcopy)"
-          install_one objdump      "$(command -v llvm-objdump)"
-          echo "--- 工具链内容 ---"
-          ls -l "$TC"
-          echo "--- 验证 clang 能编 iOS target ---"
-          echo 'int main(void){return 0;}' > /tmp/t.c
-          "$TC/clang" -target arm64-apple-ios15.0 -c /tmp/t.c -o /tmp/t.o && echo "clang OK"
-          file /tmp/t.o || true
-
-      - name: 安装 ldid（Linux 版，签名用）
-        run: |
-          set -e
-          if command -v ldid >/dev/null 2>&1; then ldid -h | head -2; exit 0; fi
-          URL=$(curl -sL https://api.github.com/repos/ProcursusTeam/ldid/releases/latest \
-                | grep -oE '"browser_download_url":[[:space:]]*"[^"]*"' \
-                | sed -E 's/.*"(https[^"]+)".*/\1/' \
-                | grep -iE 'linux' | head -1)
-          echo "下载: $URL"
-          if [ -n "$URL" ]; then
-            curl -sL -o /tmp/ldid "$URL" && chmod +x /tmp/ldid && sudo mv /tmp/ldid /usr/local/bin/ldid
-          fi
-          if command -v ldid >/dev/null 2>&1; then
-            echo "ldid 就绪"; ldid -h 2>&1 | head -2
-          else
-            echo "ldid 装不上，做一个空壳让 theos 继续（越狱环境通常能加载未签名 dylib）"
-            printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid >/dev/null
-            sudo chmod +x /usr/local/bin/ldid
-          fi
-      - name: 安装 iOS SDK（sparse，只拉一个）
-        run: |
-          set -e
-          mkdir -p "$HOME/theos/sdks"
-          if [ ! -d "$HOME/theos/sdks/iPhoneOS16.5.sdk" ]; then
+          mkdir -p "$HOME/sdks"
+          if [ ! -d "$HOME/sdks/iPhoneOS16.5.sdk" ]; then
             cd /tmp
             git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git sdks
             cd sdks
             git sparse-checkout set iPhoneOS16.5.sdk
-            cp -R iPhoneOS16.5.sdk "$HOME/theos/sdks/"
+            cp -R iPhoneOS16.5.sdk "$HOME/sdks/"
           fi
-          ls -d "$HOME/theos/sdks"/*.sdk
+          ls -d "$HOME/sdks"/*.sdk
+          echo "SDKROOT=$HOME/sdks/iPhoneOS16.5.sdk" >> "$GITHUB_ENV"
 
-      - name: 环境自检
-        run: |
-          export THEOS="$HOME/theos"
-          export PATH="$THEOS/bin:$PATH"
-          echo "THEOS=$THEOS"
-          which make clang ldid 2>/dev/null || true
-          ls "$THEOS/bin" | head -20
-          echo "--- 尝试识别 SDK ---"
-          ls "$THEOS/sdks"
-
-      - name: 编译
-        env:
-          PKG_SCHEME: ${{ matrix.pkg_scheme }}
+      - name: 编译 XiuGou.dylib
         run: |
           set -e
-          export THEOS="$HOME/theos"
-          export PATH="$THEOS/bin:$PATH"
-          export DEBUG=0
-          if [ -n "$PKG_SCHEME" ]; then
-            export THEOS_PACKAGE_SCHEME="$PKG_SCHEME"
-            echo "打包模式: rootless (/var/jb)"
+          SDK="$HOME/sdks/iPhoneOS16.5.sdk"
+
+          # 先单独编 C 文件（TOSBoard.c 是 C99，不能当 C++ 编）
+          clang -target arm64-apple-ios15.0 -isysroot "$SDK" -O2 -c TOSBoard.c -o TOSBoard.o
+          echo "TOSBoard.o 编好"
+
+          # ObjC / ObjC++ 源文件
+          SRCS=$(ls *.m *.mm 2>/dev/null)
+          echo "源文件: $SRCS"
+
+          clang++ -dynamiclib \
+            -target arm64-apple-ios15.0 \
+            -isysroot "$SDK" \
+            -fuse-ld=ld64.lld \
+            -fobjc-arc \
+            -O2 \
+            -std=c++17 \
+            -Wno-everything \
+            -framework Foundation \
+            -framework UIKit \
+            -framework QuartzCore \
+            -framework CoreGraphics \
+            -install_name "@executable_path/Frameworks/XiuGou.dylib" \
+            $SRCS TOSBoard.o \
+            -o XiuGou.dylib
+
+          echo "--- 产物 ---"
+          ls -lh XiuGou.dylib
+          file XiuGou.dylib
+          echo "--- 依赖 ---"
+          llvm-otool -L XiuGou.dylib 2>/dev/null || otool -L XiuGou.dylib 2>/dev/null || true
+
+      - name: 签名
+        run: |
+          set -e
+          URL=$(curl -sL https://api.github.com/repos/ProcursusTeam/ldid/releases/latest \
+                | grep -oE '"browser_download_url":[[:space:]]*"[^"]*"' \
+                | sed -E 's/.*"(https[^"]+)".*/\1/' | grep -i linux | head -1)
+          echo "ldid: $URL"
+          if [ -n "$URL" ]; then
+            curl -sL -o /tmp/ldid "$URL" && chmod +x /tmp/ldid && sudo mv /tmp/ldid /usr/local/bin/ldid
+            ldid -S XiuGou.dylib && echo "已用 ldid 签名"
           else
-            echo "打包模式: rootful"
+            echo "拿不到 ldid；TrollStore 注入通常也接受未签名 dylib，继续"
           fi
 
-          make clean || true
-          make package FINALPACKAGE=1 2>&1 | tee /tmp/build.log
-
-          mkdir -p artifacts
-          cp -v packages/*.deb artifacts/
-          ls -lh artifacts/
-
-      - name: 失败时输出编译日志
-        if: failure()
-        run: |
-          echo "===== 编译日志尾部 ====="
-          tail -n 120 /tmp/build.log 2>/dev/null || echo "无日志"
-
       - name: 上传产物
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: xiugou-${{ matrix.scheme }}
-          path: artifacts/*.deb
+          name: XiuGou-dylib
+          path: XiuGou.dylib
           if-no-files-found: error
+
+      - name: 失败时输出诊断
+        if: failure()
+        run: |
+          echo "=== 环境 ==="
+          clang --version || true
+          which ld64.lld ld.lld clang++ || true
+          echo "=== SDK ==="
+          ls -d "$HOME/sdks"/*.sdk 2>/dev/null || echo "无 SDK"
