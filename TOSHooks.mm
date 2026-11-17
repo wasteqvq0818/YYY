@@ -54,6 +54,13 @@ static BOOL SafeWrite(uintptr_t addr, const void *data, size_t len) {
 }
 
 static int32_t R32(uintptr_t a) { int32_t v = 0; SafeRead(a, &v, 4); return v; }
+
+// 血量是 int64（游戏里敌人血量 5000 亿 = 5e11，远超 int32 上限）
+static int64_t R64(uintptr_t a) { int64_t v = 0; SafeRead(a, &v, 8); return v; }
+static void    W64(uintptr_t a, int64_t v) { SafeWrite(a, &v, 8); }
+
+#define HP_MAX_INT64  1000000000000000LL   // 1000 万亿，覆盖任何血量
+
 static void    W32(uintptr_t a, int32_t v) { SafeWrite(a, &v, 4); }
 
 // ---- 状态 ----
@@ -62,7 +69,7 @@ static volatile int g_nData = 0, g_nInst = 0, g_killed = 0;
 static volatile int g_okBlocks = 0, g_totalBlocks = 0;
 static char g_msg[320] = "未扫描";
 
-typedef struct { uintptr_t addr; int32_t hp; int isInst; } Sample;
+typedef struct { uintptr_t addr; int64_t hp; int isInst; } Sample;
 static Sample g_samples[6];
 static int    g_sampleN = 0;
 
@@ -75,9 +82,9 @@ const char *XGSampleInfo(void) {
     b[0] = 0;
     for (int i = 0; i < g_sampleN; i++) {
         char t[72];
-        snprintf(t, sizeof(t), "%s 0x%lx hp=%d\n",
+        snprintf(t, sizeof(t), "%s 0x%lx hp=%lld\n",
                  g_samples[i].isInst ? "I" : "D",
-                 (unsigned long)g_samples[i].addr, g_samples[i].hp);
+                 (unsigned long)g_samples[i].addr, (long long)g_samples[i].hp);
         strncat(b, t, sizeof(b) - strlen(b) - 1);
     }
     return b;
@@ -171,24 +178,34 @@ static void ScanWithKlass(void *kData, void *kInst) {
 
             if (isData) {
                 int32_t dead = R32(o + XG_OFF_ENEMY_DEAD);
-                int32_t hp1  = R32(o + XG_OFF_ENEMY_HP_SIMPLE);
-                int32_t hp2  = R32(o + XG_OFF_ENEMY_HP_FULL);
 
-                if (g_sampleN < 6 && (hp1 > 0 || hp2 > 0)) {
-                    g_samples[g_sampleN++] = (Sample){ o, hp1 > 0 ? hp1 : hp2, 0 };
+                // 两套布局都按 int64 试（血量 5000 亿 = 0x74_6A528000，必须 8 字节）
+                // 0x24：6 字段版，按 int32（地址非 8 字节对齐，不按 int64 读免得误伤）
+                int32_t hpA32 = R32(o + XG_OFF_ENEMY_HP_SIMPLE);
+                BOOL okA = (hpA32 > 0 && hpA32 < 2000000000);
+
+                // 0x38：42 字段版，按 int64（5000 亿血量走这套布局）
+                int64_t hpB = R64(o + XG_OFF_ENEMY_HP_FULL);
+                BOOL okB = (hpB > 0 && hpB < HP_MAX_INT64);
+
+                if (g_sampleN < 6 && (okA || okB)) {
+                    g_samples[g_sampleN++] = (Sample){ o, okB ? hpB : (int64_t)hpA32, 0 };
                 }
-                if (hp1 > 0 && hp1 < 1000000000) { W32(o + XG_OFF_ENEMY_HP_SIMPLE, 0); killed++; }
-                if (hp2 > 0 && hp2 < 1000000000) { W32(o + XG_OFF_ENEMY_HP_FULL,   0); killed++; }
-                if (dead == 0 && (hp1 > 0 || hp2 > 0)) W32(o + XG_OFF_ENEMY_DEAD, 1);
+                if (okA) { W32(o + XG_OFF_ENEMY_HP_SIMPLE, 0); killed++; }
+                if (okB) { W64(o + XG_OFF_ENEMY_HP_FULL,   0); killed++; }
+                if (dead == 0 && (okA || okB)) W32(o + XG_OFF_ENEMY_DEAD, 1);
             } else {
-                int32_t php  = R32(o + XG_OFF_EI_PREDICT_HP);
+                int64_t php = R64(o + XG_OFF_EI_PREDICT_HP);     // predictHP 也是 int64
                 int32_t dead = R32(o + XG_OFF_EI_DEAD);
-                if (g_sampleN < 6 && php > 0) {
+                BOOL okP = (php > 0 && php < HP_MAX_INT64);
+
+                if (g_sampleN < 6 && okP) {
                     g_samples[g_sampleN++] = (Sample){ o, php, 1 };
                 }
+                // 先关掉「打不死」的开关
                 W32(o + XG_OFF_EI_PREVENT_KILL, 0);
                 W32(o + XG_OFF_EI_CANNOT_DIE, 0);
-                if (php > 0 && php < 1000000000) { W32(o + XG_OFF_EI_PREDICT_HP, 0); killed++; }
+                if (okP) { W64(o + XG_OFF_EI_PREDICT_HP, 0); killed++; }
                 if (dead == 0) { W32(o + XG_OFF_EI_DEAD, 1); killed++; }
             }
         }
@@ -204,9 +221,9 @@ static void ScanWithKlass(void *kData, void *kInst) {
              okBlocks, totalBlocks, nData, nInst, killed);
     NSLog(@"[XG] %s", g_msg);
     for (int i = 0; i < g_sampleN; i++) {
-        NSLog(@"[XG] 样本%d %s @0x%lx hp=%d", i,
+        NSLog(@"[XG] 样本%d %s @0x%lx hp=%lld", i,
               g_samples[i].isInst ? "Inst" : "Data",
-              (unsigned long)g_samples[i].addr, g_samples[i].hp);
+              (unsigned long)g_samples[i].addr, (long long)g_samples[i].hp);
     }
 }
 
