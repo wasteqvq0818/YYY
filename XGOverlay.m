@@ -164,11 +164,11 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.text = on ? @"🔨 inline hook 已装" : @"🔨 装 inline hook（备用）";
         c.detailTextLabel.text = @"改函数机器码";
     } else if (ip.row == 3) {
-        c.textLabel.text = @"⚡ 扫描并清场（旧方案）";
+        c.textLabel.text = @"⚡ 扫描并清场（旧，可能崩）";
         c.detailTextLabel.text = @"按旧偏移改，可能命中历史对象";
     } else if (ip.row == 4) {
-        c.textLabel.text = @"🏆 直接触发胜利（可能崩）";
-        c.detailTextLabel.text = @"调 Labyrinth.Victory()";
+        c.textLabel.text = @"⚠️ 调方法（已禁用，会闪退）";
+        c.detailTextLabel.text = @"il2cpp_runtime_invoke 在此游戏会崩，仅留作说明";
     } else {
         c.textLabel.text = @"🔄 刷新状态";
         c.detailTextLabel.text = @"扫描是后台跑的，状态不会自动刷";
@@ -219,7 +219,7 @@ static UIWindow *XGHostWindow(void) {
         XGScanAsync();
         [self refreshHeader];
     } else if (ip.row == 4) {
-        XGForceVictoryAsync();
+        // 已禁用：il2cpp_runtime_invoke 会导致闪退
         [self refreshHeader];
     } else {
         [self refreshHeader]; [tv reloadData];
