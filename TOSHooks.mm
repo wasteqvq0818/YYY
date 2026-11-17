@@ -2076,3 +2076,66 @@ void XGClearBattleZone(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v36 · 自动过关
+//
+//  已实测确认（v35）：把 Labyrinth.BattleZoneEnemy 的 _size 置 0，
+//  游戏立刻清场过关、敌人消失。这就是原版 XiuGou「快速胜利」的做法
+//  —— 它不改敌人血量，只让敌人列表变空。
+//
+//  这里做成自动：每 0.5 秒检查一次列表，只要有敌人就清空。
+//  安全点：
+//    · 只写 4 字节（List 的 size），_items 数组不动
+//    · 列表为空时立刻返回，不做任何事
+//    · 只在战斗场景生效（列表字段存在且有元素）
+// ============================================================================
+
+static volatile int g_autoOn = 0;
+static NSTimer *g_autoTimer = nil;
+static int g_autoCleared = 0;
+
+int XGAutoActive(void)      { return g_autoOn; }
+int XGAutoClearCount(void)  { return g_autoCleared; }
+
+static void XGAutoTick(void) {
+    @autoreleasepool {
+        if (!g_autoOn || !XGI2Init()) return;
+
+        uintptr_t list = 0;
+        if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) return;
+
+        int32_t count = 0;
+        SafeRead(list + XG_ACC_LIST_SIZE, &count, 4);
+        if (count <= 0) return;      // 没有敌人，什么都不做
+
+        // 清空
+        int32_t zero = 0;
+        if (SafeWrite(list + XG_ACC_LIST_SIZE, &zero, 4)) {
+            g_autoCleared++;
+            // 总敌人数也清零
+            uintptr_t fp = XGI2StaticFieldPtr(XG_LAB_CLASS, "totalBattleZoneEnemy");
+            if (fp) SafeWrite(fp, &zero, 4);
+            DLog("[自动] 清空 %d 个敌人（累计 %d 次）", count, g_autoCleared);
+        }
+    }
+}
+
+void XGAutoStart(void) {
+    if (g_autoOn) return;
+    g_autoOn = 1;
+    g_autoCleared = 0;
+    DLog("\n===== 自动过关开启 %s =====", [[NSDate date] description].UTF8String);
+    g_autoTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+                                                   repeats:YES
+                                                     block:^(NSTimer *t) { XGAutoTick(); }];
+    NSLog(@"[XG] 自动过关已开启");
+}
+
+void XGAutoStop(void) {
+    g_autoOn = 0;
+    if (g_autoTimer) { [g_autoTimer invalidate]; g_autoTimer = nil; }
+    DLog("===== 自动过关关闭（本次清了 %d 次）=====", g_autoCleared);
+    NSLog(@"[XG] 自动过关已关闭");
+}
