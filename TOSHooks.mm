@@ -1066,6 +1066,36 @@ int  XGZBChanged(void) { return g_zbChanged; }
 int  XGZBRan(void)     { return g_zbRan; }
 const char *XGZBMessage(void) { return g_zbMsg; }
 
+
+// ---------------- 诊断日志（写 Documents/XG_diag.txt）----------------
+static FILE *g_diagF = NULL;
+static void DLog(const char *fmt, ...) {
+    static int inited = 0;
+    if (!inited) {
+        inited = 1;
+        NSArray *cands = @[
+            [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+                stringByAppendingPathComponent:@"XG_diag.txt"],
+            @"/var/mobile/Documents/XG_diag.txt",
+            [NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_diag.txt"]
+        ];
+        for (NSString *pp in cands) {
+            if (!pp) continue;
+            [[NSFileManager defaultManager] createDirectoryAtPath:[pp stringByDeletingLastPathComponent]
+                                      withIntermediateDirectories:YES attributes:nil error:nil];
+            g_diagF = fopen(pp.UTF8String, "a");
+            if (g_diagF) { NSLog(@"[XG] diag -> %@", pp); break; }
+        }
+    }
+    if (!g_diagF) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(g_diagF, fmt, ap);
+    va_end(ap);
+    fputc('\n', g_diagF);
+    fflush(g_diagF);
+}
+
 static void DisarmManagedBool(uintptr_t mb) {
     if (!mb || mb < 0x10000) return;
     uint8_t f = 0;
@@ -1085,16 +1115,19 @@ void XGZeroBattleZoneAsync(void) {
     g_zbHits = 0;
     g_zbChanged = 0;
     snprintf(g_zbMsg, sizeof(g_zbMsg), "读取中…");
+    DLog("\n===== 清血 %s =====", [[NSDate date] description].UTF8String);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
             if (!XGI2Init()) {
+                DLog("① il2cpp 未就绪");
                 snprintf(g_zbMsg, sizeof(g_zbMsg), "①il2cpp 未就绪");
                 g_state = 3; return;
             }
 
             Il2CppClass *lab = XGI2Class(XG_LAB_CLASS);
             void *kData = XGI2Class(XG_ENEMY_CLASS);
+            DLog("② Labyrinth=%p EnemyData=%p", lab, kData);
             if (!lab) {
                 snprintf(g_zbMsg, sizeof(g_zbMsg), "②找不到 Labyrinth 类");
                 g_state = 3; return;
@@ -1102,6 +1135,7 @@ void XGZeroBattleZoneAsync(void) {
 
             // 静态数据基址（诊断用）
             uintptr_t sdata = (uintptr_t)XGI2StaticData(XG_LAB_CLASS);
+            DLog("③ static data = 0x%lx", (unsigned long)sdata);
 
             // 关两个阻止开关
             uintptr_t blkDieSlot = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
@@ -1112,6 +1146,8 @@ void XGZeroBattleZoneAsync(void) {
 
             // 战场敌人列表
             uintptr_t slot = XGI2StaticFieldPtr(XG_LAB_CLASS, "BattleZoneEnemy");
+            DLog("④ BattleZoneEnemy slot = 0x%lx  (blockDie slot=0x%lx)",
+                 (unsigned long)slot, (unsigned long)blkDieSlot);
             if (!slot) {
                 snprintf(g_zbMsg, sizeof(g_zbMsg),
                          "③拿不到 BattleZoneEnemy 字段（sdata=0x%lx）", (unsigned long)sdata);
@@ -1120,6 +1156,7 @@ void XGZeroBattleZoneAsync(void) {
 
             uintptr_t list = 0;
             if (!SafeRead(slot, &list, 8) || list < 0x10000) {
+                DLog("④ 列表为空 list=0x%lx", (unsigned long)list);
                 snprintf(g_zbMsg, sizeof(g_zbMsg),
                          "④列表为空 slot=0x%lx list=0x%lx（确认在战斗里）",
                          (unsigned long)slot, (unsigned long)list);
@@ -1132,24 +1169,43 @@ void XGZeroBattleZoneAsync(void) {
             SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
 
             if (!items || count <= 0 || count > 64) {
+                DLog("⑤ list=0x%lx items=0x%lx count=%d", (unsigned long)list, (unsigned long)items, count);
                 snprintf(g_zbMsg, sizeof(g_zbMsg),
                          "⑤列表异常 list=0x%lx items=0x%lx count=%d",
                          (unsigned long)list, (unsigned long)items, count);
                 g_state = 3; return;
             }
 
+            DLog("⑥ 开始遍历 count=%d items=0x%lx", count, (unsigned long)items);
             int hits = 0, changed = 0, klassFail = 0, mdataFail = 0;
             uint8_t zero16[XG_ACC_DECIMAL_SIZE];
             memset(zero16, 0, sizeof(zero16));
 
             for (int i = 0; i < count; i++) {
                 uintptr_t inst = 0;
-                if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
+                if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) {
+                    DLog("  [%d] 读实例失败", i);
+                    continue;
+                }
                 hits++;
 
                 uintptr_t mData = 0;
-                if (!SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) || mData < 0x10000) { mdataFail++; continue; }
-                if (kData && ReadKlass(mData) != kData) { klassFail++; continue; }
+                if (!SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) || mData < 0x10000) {
+                    DLog("  [%d] inst=0x%lx mData 读失败", i, (unsigned long)inst);
+                    mdataFail++; continue;
+                }
+                void *mk = ReadKlass(mData);
+                if (kData && mk != kData) {
+                    DLog("  [%d] inst=0x%lx mData=0x%lx klass=%p != %p",
+                         i, (unsigned long)inst, (unsigned long)mData, mk, kData);
+                    klassFail++; continue;
+                }
+                // 清血前：先读一下原来的血量（Decimal 低 96 位当十六进制看）
+                uint32_t oldVal[4] = {0,0,0,0};
+                SafeRead(mData + XG_ACC_DATA_CUR_HP, oldVal, 16);
+                DLog("  [%d] inst=0x%lx mData=0x%lx 原血 lo=%u mid=%u hi=%u flags=0x%x",
+                     i, (unsigned long)inst, (unsigned long)mData,
+                     oldVal[0], oldVal[1], oldVal[2], oldVal[3]);
 
                 if (SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16))) changed++;
 
@@ -1165,6 +1221,8 @@ void XGZeroBattleZoneAsync(void) {
             g_zbHits = hits;
             g_zbChanged = changed;
             g_state = 2;
+            DLog("⑦ 结果: 敌人=%d 清血=%d 关开关=%d mData失败=%d klass失败=%d",
+                 hits, changed, disarmed, mdataFail, klassFail);
             snprintf(g_zbMsg, sizeof(g_zbMsg),
                      "敌人%d｜清血%d｜关开关%d｜mData失败%d｜klass失败%d",
                      hits, changed, disarmed, mdataFail, klassFail);
