@@ -295,6 +295,11 @@ static void XGBoot(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             [XGOverlay install];
+            // 恢复上次的自动过关开关状态
+            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"XG_AUTO_KILL"]) {
+                NSLog(@"[XG] 恢复自动过关（上次开着）");
+                XGAutoKillStart();
+            }
         });
     }
 }
@@ -2470,4 +2475,116 @@ void XGForceVictoryNow(void) {
             NSLog(@"[XG] %s", g_victoryMsg);
         }
     });
+}
+
+
+// ============================================================================
+//  v40 · 自动过关开关
+//
+//  两条路实测结论：
+//    · 调 Labyrinth.Victory()  → 立刻结算，但跳过流程 → 不掉卡
+//    · 调 EnemyInstance.EnemyDie() → 走完整死亡流程（消失+波次推进+结算）
+//      v37 实测：单敌人时会消失并进下一关 —— 说明流程是完整的
+//
+//  所以「有卡又自动」的做法是：自动连续调 EnemyDie，
+//  每 0.25 秒处理一个，直到关卡自然结束。10 波关卡约 2~3 秒走完，
+//  掉落走游戏自己的逻辑，正常发卡。
+// ============================================================================
+
+static volatile int g_autoKill = 0;
+static NSTimer *g_autoKillTimer = nil;
+static int g_autoKilled = 0;      // 本次累计处理数
+static int g_autoIdle = 0;
+static void *g_mpEnemyDie = NULL;
+static int   g_mpTried = 0;
+
+int XGAutoKillActive(void) { return g_autoKill; }
+int XGAutoKillTotal(void)  { return g_autoKilled; }
+
+void XGAutoKillTickOnce(void) {
+    @autoreleasepool {
+        if (!XGI2Init()) return;
+
+        uintptr_t list = 0;
+        if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+            g_autoIdle++;
+            return;
+        }
+        int32_t count = 0;
+        SafeRead(list + XG_ACC_LIST_SIZE, &count, 4);
+        if (count <= 0) { g_autoIdle++; return; }     // 等下一波
+
+        uintptr_t items = 0;
+        SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+        if (!items || items < 0x10000) return;
+
+        // 拿方法指针（只查一次）
+        if (!g_mpTried) {
+            g_mpTried = 1;
+            g_mpEnemyDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "EnemyDie", 0);
+            if (!g_mpEnemyDie) g_mpEnemyDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 1);
+            DLog("[自动] EnemyDie 指针 = %p", g_mpEnemyDie);
+        }
+        if (!g_mpEnemyDie) return;
+
+        // 找一个真正的 EnemyInstance
+        void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+        void *kData = XGI2Class(XG_ENEMY_CLASS);
+        uintptr_t inst = 0;
+        for (int i = 0; i < count && i < 16; i++) {
+            uintptr_t cand = 0;
+            if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &cand, 8) || cand < 0x10000) continue;
+            if (kInst && ReadKlass(cand) != kInst) continue;
+            inst = cand;
+            break;
+        }
+        if (!inst) { g_autoIdle++; return; }
+
+        // 清血 + 关防秒杀，再走死亡流程
+        uintptr_t mData = 0;
+        if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000 &&
+            (!kData || ReadKlass(mData) == kData)) {
+            uint8_t zero16[XG_ACC_DECIMAL_SIZE];
+            memset(zero16, 0, sizeof(zero16));
+            SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
+        }
+        float zf = 0.0f;
+        SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
+        uint8_t b0 = 0;
+        SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
+        SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
+
+        ((void (*)(void *))g_mpEnemyDie)((void *)inst);
+        g_autoKilled++;
+        g_autoIdle = 0;
+        DLog("[自动] 处理第 %d 个（该波剩余 %d）", g_autoKilled, count);
+    }
+}
+
+static void XGAutoKillTimerTick(void) {
+    if (!g_autoKill) return;
+    XGAutoKillTickOnce();
+}
+
+void XGAutoKillStart(void) {
+    if (g_autoKill) return;
+    g_autoKill = 1;
+    g_autoKilled = 0;
+    g_autoIdle = 0;
+    DLog("\n===== 自动过关开启 %s =====", [[NSDate date] description].UTF8String);
+    g_autoKillTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
+                                                      repeats:YES
+                                                        block:^(NSTimer *t) { XGAutoKillTimerTick(); }];
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"XG_AUTO_KILL"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    NSLog(@"[XG] 自动过关已开启");
+}
+
+void XGAutoKillStop(void) {
+    g_autoKill = 0;
+    if (g_autoKillTimer) { [g_autoKillTimer invalidate]; g_autoKillTimer = nil; }
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"XG_AUTO_KILL"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    DLog("===== 自动过关关闭（本次处理 %d 个）=====", g_autoKilled);
+    NSLog(@"[XG] 自动过关已关闭");
 }
