@@ -74,6 +74,9 @@ void XGI2ProbeConfigured(void);
 // 返回写入的字节数
 int XGI2ProbeToFile(const char *path);
 
+// 遍历所有类的方法名，筛出胜利/结算/死亡相关函数（v13 用）
+int XGI2ProbeMethods(const char *path);
+
 // 探测结果的实际落盘路径与大小（面板直接显示，省得用户到处找）
 extern char XGProbePathBuf[512];
 extern int  XGProbeBytes;
