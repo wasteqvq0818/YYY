@@ -92,7 +92,7 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
 
-    const char *sm = XGZBHits() > 0 ? XGZBMessage() : (XGZeroHits() > 0 ? XGZeroMessage()
+    const char *sm = XGZBRan() ? XGZBMessage() : (XGZeroHits() > 0 ? XGZeroMessage()
                      : (XGSkipHits() > 0 ? XGSkipMessage() : XGScanMessage()));
     NSString *text = [NSString stringWithFormat:@"%@\n计数：HP %d｜isDead %d｜CheckDie %d｜验证 %d\n%@",
         stateLine, XGCntCurHP2(), XGCntIsDead2(), XGCntCheckDie2(), XGCntVerify2(),
