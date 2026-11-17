@@ -92,7 +92,7 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
 
-    const char *sm = XGScanMessage();
+    const char *sm = XGSkipHits() > 0 ? XGSkipMessage() : XGScanMessage();
     NSString *text = [NSString stringWithFormat:@"%@\n计数：HP %d｜isDead %d｜CheckDie %d｜验证 %d\n%@",
         stateLine, XGCntCurHP2(), XGCntIsDead2(), XGCntCheckDie2(), XGCntVerify2(),
         (sm && sm[0]) ? [NSString stringWithUTF8String:sm] : @""];
@@ -119,13 +119,15 @@ static UIWindow *XGHostWindow(void) {
     g_panelWindow = nil;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 2; }
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
-    return @"操作";
+    return s == 0 ? @"操作" : @"跳关参数（游戏里显示的 3/7 就填 3 和 7）";
 }
 
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 5; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
+    return s == 0 ? 5 : 2;
+}
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
@@ -135,27 +137,36 @@ static UIWindow *XGHostWindow(void) {
     c.detailTextLabel.textColor = [UIColor colorWithWhite:0.65 alpha:1.0];
     c.detailTextLabel.font = [UIFont systemFontOfSize:11];
 
+    if (ip.section == 1) {
+        if (ip.row == 0) {
+            c.textLabel.text = [NSString stringWithFormat:@"当前第几关：%d", XG.conf.stageCurrent];
+        } else {
+            c.textLabel.text = [NSString stringWithFormat:@"总共几关：%d", XG.conf.stageTotal];
+        }
+        c.detailTextLabel.text = @"点一下改数字";
+        return c;
+    }
+
     if (ip.row == 0) {
-        c.textLabel.text = @"⚡ 扫描并清场";
-        c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0];
-        c.detailTextLabel.text = @"旧方案（改内存），现在优先用下面的 Hook";
+        c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d → 直接过关）",
+                            XG.conf.stageCurrent, XG.conf.stageTotal];
+        c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.95 blue:0.55 alpha:1.0];
+        c.detailTextLabel.text = @"把「当前关」改成「总关数」，游戏认为已打到最后一关";
     } else if (ip.row == 1) {
-        BOOL on = XGDeadHookInstalled() != 0;
-        c.textLabel.text = on ? @"🔨 Hook 已装（点此卸载）" : @"🔨 装 Hook（血量+死亡判定）";
+        BOOL on = XGInlineCount() > 0;
+        c.textLabel.text = on ? @"🔨 inline hook 已装" : @"🔨 装 inline hook（备用）";
         c.textLabel.textColor = on ? [UIColor colorWithRed:0.4 green:0.95 blue:0.5 alpha:1.0]
-                                   : [UIColor colorWithRed:1.0 green:0.6 blue:0.3 alpha:1.0];
-        c.detailTextLabel.text = @"改 MethodInfo 指针：HP 恒 0 + isDead 恒 true + CheckDie 恒 true";
+                                   : [UIColor colorWithWhite:0.8 alpha:1.0];
+        c.detailTextLabel.text = @"改函数机器码（跳关无效时再试这个）";
     } else if (ip.row == 2) {
-        c.textLabel.text = @"🏆 直接触发胜利（可能崩）";
-        c.textLabel.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.3 alpha:1.0];
-        c.detailTextLabel.text = @"调 Labyrinth.Victory()，之前试过会崩，谨慎";
+        c.textLabel.text = @"⚡ 扫描并清场";
+        c.detailTextLabel.text = @"旧方案（改敌人血量）";
     } else if (ip.row == 3) {
-        c.textLabel.text = @"🔍 扫描方法名";
-        c.textLabel.textColor = [UIColor colorWithRed:0.45 green:0.7 blue:1.0 alpha:1.0];
-        c.detailTextLabel.text = @"重新导出方法清单到 XG_methods.txt";
+        c.textLabel.text = @"🏆 直接触发胜利（可能崩）";
+        c.detailTextLabel.text = @"调 Labyrinth.Victory()";
     } else {
         c.textLabel.text = @"🔄 刷新状态";
-        c.detailTextLabel.text = @"调用是后台跑的，状态不会自动刷";
+        c.detailTextLabel.text = @"扫描是后台跑的，状态不会自动刷";
     }
     return c;
 }
@@ -163,37 +174,45 @@ static UIWindow *XGHostWindow(void) {
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
 
+    if (ip.section == 1) {
+        int *slot = (ip.row == 0) ? &XG.conf.stageCurrent : &XG.conf.stageTotal;
+        NSString *title = (ip.row == 0) ? @"当前第几关" : @"总共几关";
+        int cur = *slot;
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:title
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+        [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+            tf.keyboardType = UIKeyboardTypeNumberPad;
+            tf.text = [NSString stringWithFormat:@"%d", cur];
+        }];
+        [a addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *act) {
+            int v = [a.textFields.firstObject.text intValue];
+            if (v > 0) { *slot = v; XGSaveConfig(); [tv reloadData]; [self refreshHeader]; }
+        }]];
+        [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:a animated:YES completion:nil];
+        return;
+    }
+
     if (ip.row == 0) {
-        XGScanAsync();
+        XGSkipStageAsync();
         [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
-        if (XGInlineCount() > 0) {
-            [self refreshHeader];
-            [tv reloadData];
-            return;
-        }
-        XGInstallInlineHooks();
-        [self refreshHeader];
-        [tv reloadData];
+        if (XGInlineCount() == 0) XGInstallInlineHooks();
+        [self refreshHeader]; [tv reloadData];
     } else if (ip.row == 2) {
+        XGScanAsync();
+        [self refreshHeader];
+    } else if (ip.row == 3) {
         XGForceVictoryAsync();
         [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
-    } else if (ip.row == 3) {
-        XGScanMethodsAsync();
-        [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else {
-        [self refreshHeader];
-        [tv reloadData];
+        [self refreshHeader]; [tv reloadData];
     }
 }
 
