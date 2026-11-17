@@ -1306,19 +1306,21 @@ int  XGKillChanged(void) { return g_killChanged; }
 int  XGKillRan(void) { return g_killRan; }
 const char *XGKillMessage(void) { return g_killMsg; }
 
+// 只改数据，绝不调用游戏方法（il2cpp_runtime_invoke 在这个游戏上会崩）
 void XGKillBattleZoneAsync(void) {
     if (g_state == 1) { snprintf(g_killMsg, sizeof(g_killMsg), "上一次还在跑"); return; }
     g_state = 1;
     g_killChanged = 0;
     g_killRan = 1;
     snprintf(g_killMsg, sizeof(g_killMsg), "执行中…");
-    DLog("\n===== 击杀 %s =====", [[NSDate date] description].UTF8String);
+    DLog("
+===== 清血v29 %s =====", [[NSDate date] description].UTF8String);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
             if (!XGI2Init()) { snprintf(g_killMsg, sizeof(g_killMsg), "il2cpp 未就绪"); g_state = 3; return; }
 
-            // 1. 关掉阻止开关
+            // 1. 关阻止开关
             int disarmed = 0;
             uintptr_t mbDie = 0, mbBar = 0;
             if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEnemyDie", &mbDie, 8) && mbDie > 0x10000) {
@@ -1328,10 +1330,10 @@ void XGKillBattleZoneAsync(void) {
                 DisarmManagedBool(mbBar); disarmed++;
             }
 
-            // 2. 拿战场敌人列表
+            // 2. 战场敌人
             uintptr_t list = 0;
             if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
-                snprintf(g_killMsg, sizeof(g_killMsg), "BattleZoneEnemy 读不到/为空");
+                snprintf(g_killMsg, sizeof(g_killMsg), "BattleZoneEnemy 为空");
                 g_state = 3; return;
             }
             uintptr_t items = 0; int32_t count = 0;
@@ -1343,71 +1345,65 @@ void XGKillBattleZoneAsync(void) {
                 g_state = 3; return;
             }
 
-            // 3. 拿方法（真实实例上调用，安全）
-            void *kInst  = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
-            void *kData  = XGI2Class(XG_ENEMY_CLASS);
-            void *mCheck = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "CheckDie", 0);
-            void *mDie0  = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 0);
-            void *mDie1  = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 1);
-            DLog("方法: CheckDie=%p Die/0=%p Die/1=%p", mCheck, mDie0, mDie1);
+            void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+            void *kData = XGI2Class(XG_ENEMY_CLASS);
 
-            int cleared = 0, died = 0, invited = 0;
+            int cleared = 0, verified = 0, klassBad = 0;
             uint8_t zero16[XG_ACC_DECIMAL_SIZE];
             memset(zero16, 0, sizeof(zero16));
 
             for (int i = 0; i < count; i++) {
                 uintptr_t inst = 0;
                 if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
-                if (kInst && ReadKlass(inst) != kInst) {
-                    DLog("  [%d] inst=0x%lx klass 不匹配", i, (unsigned long)inst);
-                    continue;
+                if (kInst && ReadKlass(inst) != kInst) { klassBad++; continue; }
+
+                // 2.1 清血 + 回读验证
+                uintptr_t mData = 0;
+                if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000 &&
+                    (!kData || ReadKlass(mData) == kData)) {
+
+                    uint32_t before[4] = {0,0,0,0};
+                    SafeRead(mData + XG_ACC_DATA_CUR_HP, before, 16);
+                    SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
+                    SafeWrite(mData + XG_ACC_DATA_MAX_HP, zero16, sizeof(zero16));
+                    uint32_t after[4] = {0,0,0,0};
+                    SafeRead(mData + XG_ACC_DATA_CUR_HP, after, 16);
+
+                    BOOL ok = (after[0] == 0 && after[1] == 0 && after[2] == 0 && after[3] == 0);
+                    if (ok) verified++;
+                    cleared++;
+                    DLog("  [%d] mData=0x%lx 前[%u,%u,%u,0x%x] 后[%u,%u,%u,0x%x] 写入%s",
+                         i, (unsigned long)mData,
+                         before[0], before[1], before[2], before[3],
+                         after[0], after[1], after[2], after[3],
+                         ok ? "成功" : "失败");
                 }
 
-                // 3.1 清血
-                uintptr_t mData = 0;
-                if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000) {
-                    if (!kData || ReadKlass(mData) == kData) {
-                        SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
-                        SafeWrite(mData + XG_ACC_DATA_MAX_HP, zero16, sizeof(zero16));
-                        cleared++;
-                    }
-                }
+                // 2.2 清显示值 + 关防秒杀 + 标死 + waitingToDie
                 float zf = 0.0f;
                 SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
-
-                // 3.2 关防秒杀
-                uint8_t b0 = 0;
+                uint8_t b0 = 0, b1 = 1;
                 SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
                 SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
-
-                // 3.3 标死
-                uint8_t b1 = 1;
                 SafeWrite(inst + XG_ACC_INST_ISDEAD, &b1, 1);
+                SafeWrite(inst + 0x180, &b1, 1);      // waitingToDie
 
-                // 3.4 触发死亡判定（真实实例，安全）
-                void *exc = NULL;
-                if (mCheck) {
-                    XGI2Invoke(mCheck, (void *)inst, NULL, &exc);
-                    if (!exc) invited++;
-                    exc = NULL;
-                }
-                if (mDie0) {
-                    XGI2Invoke(mDie0, (void *)inst, NULL, &exc);
-                    if (!exc) died++;
-                    exc = NULL;
-                } else if (mDie1) {
-                    void *arg = (void *)1;
-                    void **ps = (void **)&arg;
-                    XGI2Invoke(mDie1, (void *)inst, ps, &exc);
-                    if (!exc) died++;
-                }
+                // 2.3 回读关键字段
+                uint8_t isDead = 0, waiting = 0, cannotDie = 0;
+                float php = -1;
+                SafeRead(inst + XG_ACC_INST_ISDEAD, &isDead, 1);
+                SafeRead(inst + 0x180, &waiting, 1);
+                SafeRead(inst + XG_ACC_INST_CANNOTDIE, &cannotDie, 1);
+                SafeRead(inst + XG_ACC_INST_PREDICT_HP, &php, 4);
+                DLog("  [%d] inst=0x%lx isDead=%d waitingToDie=%d cannotDie=%d predictHP=%.1f",
+                     i, (unsigned long)inst, isDead, waiting, cannotDie, php);
             }
 
             g_killChanged = cleared;
             g_state = 2;
             snprintf(g_killMsg, sizeof(g_killMsg),
-                     "敌人%d｜清血%d｜CheckDie%d｜Die%d｜关开关%d",
-                     count, cleared, invited, died, disarmed);
+                     "敌人%d｜清血%d｜回读验证%d｜klass不符%d｜关开关%d",
+                     count, cleared, verified, klassBad, disarmed);
             DLog("结果: %s", g_killMsg);
             NSLog(@"[XG] %s", g_killMsg);
         }
