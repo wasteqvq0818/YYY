@@ -1783,3 +1783,72 @@ void XGPatchCacheAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v33 · inline hook 血量 getter
+//
+//  事实链（前面各版实测）：
+//    · 直接改 EnemyData._mCurrentHP 的 Decimal → 回读确认是 0，但血条不动
+//    · 改 EnemyInstance.predictHP(float) = 0 → 血条依然满
+//    · 改 RESTORE_CACHE 的 extras.hp → 进关卡被服务器数据覆盖
+//  结论：血条与死亡判定都不读这些字段，而是调用 getter 取值。
+//
+//  所以拦截 getter 本身：EnemyData.get_mCurrentHP() 返回 Number(16 字节 struct)。
+//  ARM64 上 16 字节 struct 通过 x0:x1 返回，直接把它们清 0 再 ret 即可。
+//  用 inline hook 改机器码 —— 这是唯一能拦住 IL2CPP AOT 直接调用的方式
+//  （改 MethodInfo 指针无效，v18 已验证）。
+// ============================================================================
+
+// 纯汇编：x0 = x1 = 0，然后返回。等价于返回 Number(0)
+__attribute__((naked)) static void xg_getHP_zero(void) {
+    __asm__ volatile(
+        "mov x0, xzr\n\t"
+        "mov x1, xzr\n\t"
+        "ret\n\t"
+    );
+}
+
+static int g_hpGetterHooked = 0;
+static void *g_hpGetterTramp = NULL;
+
+int XGHPGetterHooked(void) { return g_hpGetterHooked; }
+
+int XGHookHPGetter(void) {
+    if (g_hpGetterHooked) return 1;
+    if (!XGI2Init()) { snprintf(g_patchMsg, sizeof(g_patchMsg), "il2cpp 未就绪"); return 0; }
+
+    // 1. get_mCurrentHP()：Number get_mCurrentHP()
+    void *mi = XGI2MethodInfo(XG_ENEMY_CLASS, "get_mCurrentHP", 0);
+    if (!mi) {
+        DLog("拿不到 get_mCurrentHP 的 MethodInfo");
+        snprintf(g_patchMsg, sizeof(g_patchMsg), "找不到 get_mCurrentHP");
+        return 0;
+    }
+    void *fn = *(void **)mi;
+    DLog("get_mCurrentHP methodPointer = %p", fn);
+
+    // 2. inline hook
+    void *tramp = NULL;
+    if (!InlineHook(fn, (void *)xg_getHP_zero, &tramp)) {
+        snprintf(g_patchMsg, sizeof(g_patchMsg), "inline hook 失败");
+        return 0;
+    }
+    g_hpGetterTramp = tramp;
+    g_hpGetterHooked = 1;
+
+    // 3. 顺手 hook set_mCurrentHP：任何设置血量的操作都改成 0
+    void *miSet = XGI2MethodInfo(XG_ENEMY_CLASS, "set_mCurrentHP", 1);
+    if (miSet) {
+        void *fnSet = *(void **)miSet;
+        void *t2 = NULL;
+        if (InlineHook(fnSet, (void *)ih_setCurrentHP, &t2)) {
+            DLog("set_mCurrentHP 也 hook 了 (tramp=%p)", t2);
+        }
+    }
+
+    snprintf(g_patchMsg, sizeof(g_patchMsg),
+             "血量 getter 已 hook → 游戏读到的血量恒为 0");
+    DLog("结果: %s", g_patchMsg);
+    return 1;
+}
