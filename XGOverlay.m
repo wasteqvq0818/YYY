@@ -92,7 +92,8 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
     const char *sm;
-    if (XGKillRan())           sm = XGKillMessage();
+    if (XGCallRan())           sm = XGCallDieMsg();
+    else if (XGKillRan())      sm = XGKillMessage();
     else if (XGZBRan())        sm = XGZBMessage();
     else if (XGZeroHits() > 0) sm = XGZeroMessage();
     else if (XGSkipHits() > 0) sm = XGSkipMessage();
@@ -152,9 +153,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"💀 清血 + 触发死亡（终版）";
+        c.textLabel.text = @"⚡ 直接调 EnemyDie（绕过 runtime_invoke）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"清血 → 关防秒杀 → 标死 → 调 CheckDie/Die";
+        c.detailTextLabel.text = @"清血后直接调用方法指针 EnemyDie()，不封送";
     } else if (ip.row == 1) {
         c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d）",
                             XG.conf.stageCurrent, XG.conf.stageTotal];
@@ -201,7 +202,7 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGKillBattleZoneAsync();
+        XGCallEnemyDieAsync();
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
