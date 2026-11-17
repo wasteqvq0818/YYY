@@ -47,6 +47,8 @@ static void          *(*p_runtime_invoke)(const void *, void *, void **, void **
 static void          *(*p_class_get_static_field_data)(Il2CppClass *);
 static void           (*p_runtime_class_init)(Il2CppClass *);
 
+static void PLog(const char *fmt, ...);   // 前向声明（下面多处提前用）
+
 static bool g_ready = false;
 static char g_err[256];
 
