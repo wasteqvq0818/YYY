@@ -1408,3 +1408,125 @@ void XGKillBattleZoneAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v30 · 直接调用 methodPointer
+//
+//  v29 的 XG_diag 证明数据全部改对了（血量前[0,0,1783793664,0x74] 后全0、
+//  isDead=1、waitingToDie=1、predictHP=0），但敌人不死 ——
+//  说明游戏要在「受击/死亡事件」里才会触发判定。
+//
+//  v28 用 il2cpp_runtime_invoke 调 Die 会崩：runtime_invoke 要做参数封送、
+//  异常包装、线程状态切换，在注入环境里会破坏游戏状态。
+//
+//  v30 绕开它：methodPointer 本身就是原生 C 函数，按签名直接调用即可。
+//  目标用 EnemyDie()（无参无返回值，RVA 0x2FC5CF4），不用传任何东西。
+// ============================================================================
+
+static volatile int g_callOk = 0, g_callFail = 0, g_callRan = 0;
+static char g_callDieMsg[384] = "未执行";
+
+int  XGCallOk(void)   { return g_callOk; }
+int  XGCallFail(void) { return g_callFail; }
+int  XGCallRan(void)  { return g_callRan; }
+const char *XGCallDieMsg(void) { return g_callDieMsg; }
+
+void XGCallEnemyDieAsync(void) {
+    if (g_state == 1) { snprintf(g_callDieMsg, sizeof(g_callDieMsg), "上一次还在跑"); return; }
+    g_state = 1;
+    g_callOk = g_callFail = 0;
+    g_callRan = 1;
+    snprintf(g_callDieMsg, sizeof(g_callDieMsg), "执行中…");
+    DLog("\n===== 直调 EnemyDie %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_callDieMsg, sizeof(g_callDieMsg), "il2cpp 未就绪"); g_state = 3; return; }
+
+            // 1. 拿战场敌人
+            uintptr_t list = 0;
+            if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+                snprintf(g_callDieMsg, sizeof(g_callDieMsg), "BattleZoneEnemy 为空");
+                g_state = 3; return;
+            }
+            uintptr_t items = 0; int32_t count = 0;
+            SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+            SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
+            if (!items || count <= 0 || count > 32) {
+                snprintf(g_callDieMsg, sizeof(g_callDieMsg), "列表异常 count=%d", count);
+                g_state = 3; return;
+            }
+
+            // 2. 拿方法指针（XGI2Method 返回的就是 methodPointer）
+            void *mpEnemyDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "EnemyDie", 0);
+            void *mpDie1     = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 1);
+            DLog("方法指针: EnemyDie()=%p  Die(bool)=%p", mpEnemyDie, mpDie1);
+
+            if (!mpEnemyDie && !mpDie1) {
+                snprintf(g_callDieMsg, sizeof(g_callDieMsg), "两个方法都没找到");
+                g_state = 3; return;
+            }
+
+            void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+            void *kData = XGI2Class(XG_ENEMY_CLASS);
+
+            int ok = 0, fail = 0, cleared = 0;
+            uint8_t zero16[XG_ACC_DECIMAL_SIZE];
+            memset(zero16, 0, sizeof(zero16));
+
+            for (int i = 0; i < count; i++) {
+                uintptr_t inst = 0;
+                if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
+                if (kInst && ReadKlass(inst) != kInst) continue;
+
+                // 2.1 先把数据准备好（血量归零 + 关防秒杀）
+                uintptr_t mData = 0;
+                if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000 &&
+                    (!kData || ReadKlass(mData) == kData)) {
+                    SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
+                    cleared++;
+                }
+                float zf = 0.0f;
+                SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
+                uint8_t b0 = 0;
+                SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
+                SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
+
+                // 2.2 直接调 methodPointer（不经 runtime_invoke）
+                BOOL called = NO;
+                if (mpEnemyDie) {
+                    DLog("  [%d] 直接调用 EnemyDie() @0x%lx，对象 0x%lx",
+                         i, (unsigned long)(uintptr_t)mpEnemyDie, (unsigned long)inst);
+                    ((void (*)(void *))mpEnemyDie)((void *)inst);
+                    called = YES;
+                }
+                if (!called && mpDie1) {
+                    DLog("  [%d] 直接调用 Die(true) @0x%lx，对象 0x%lx",
+                         i, (unsigned long)(uintptr_t)mpDie1, (unsigned long)inst);
+                    ((void (*)(void *, uint8_t))mpDie1)((void *)inst, 1);
+                    called = YES;
+                }
+
+                if (called) {
+                    ok++;
+                    // 调用后再置一次死亡标志
+                    uint8_t b1 = 1;
+                    SafeWrite(inst + XG_ACC_INST_ISDEAD, &b1, 1);
+                    SafeWrite(inst + 0x180, &b1, 1);
+                    DLog("  [%d] 调用返回，isDead 已置 1", i);
+                } else {
+                    fail++;
+                }
+            }
+
+            g_callOk = ok;
+            g_callFail = fail;
+            g_state = 2;
+            snprintf(g_callDieMsg, sizeof(g_callDieMsg),
+                     "敌人%d｜清血%d｜调用成功%d｜失败%d", count, cleared, ok, fail);
+            DLog("结果: %s", g_callDieMsg);
+            NSLog(@"[XG] %s", g_callDieMsg);
+        }
+    });
+}
