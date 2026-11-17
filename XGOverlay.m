@@ -154,9 +154,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"💉 改缓存敌人血量 = 1（XiuGou 做法）";
+        c.textLabel.text = @"🎯 Hook 血量读取（让游戏看到 0 血）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"改 RESTORE_CACHE 里 extras.hp，重进关卡一击必杀";
+        c.detailTextLabel.text = @"inline hook get_mCurrentHP，任何读取都返回 0";
     } else if (ip.row == 1) {
         c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d）",
                             XG.conf.stageCurrent, XG.conf.stageTotal];
@@ -203,7 +203,8 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGPatchCacheAsync();
+        if (XGHookHPGetter()) { [self refreshHeader]; [tv reloadData]; }
+        else { [self refreshHeader]; }
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
