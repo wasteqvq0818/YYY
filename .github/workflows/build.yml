@@ -67,7 +67,6 @@ jobs:
             --ld-path=/usr/bin/ld64.lld \
             -fobjc-arc \
             -O2 \
-            -std=c++17 \
             -Wno-everything \
             -framework Foundation \
             -framework UIKit \
