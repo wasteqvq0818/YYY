@@ -154,9 +154,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = XGAutoActive() ? [NSString stringWithFormat:@"🚀 自动过关：开（已清 %d 次）", XGAutoClearCount()] : @"🚀 自动过关：关（点此开启）";
+        c.textLabel.text = @"💀 走游戏死亡流程（敌人消失+结算）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = XGAutoActive() ? @"进战斗自动清空敌人，不用再操作" : @"开启后，一进战斗就会自动清场过关";
+        c.detailTextLabel.text = @"直接调 EnemyDie() 的 methodPointer，和 XG 的效果一致";
     } else if (ip.row == 1) {
         c.textLabel.text = @"🧹 手动清空当前敌人";
         c.detailTextLabel.text = XGClearMsg() && XGClearMsg()[0] ? [NSString stringWithUTF8String:XGClearMsg()] : @"清空 BattleZoneEnemy（只点一次）";
@@ -202,10 +202,12 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        if (XGAutoActive()) XGAutoStop();
-        else XGAutoStart();
+        XGDieCallAsync();
         [self refreshHeader];
-        [tv reloadData];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
