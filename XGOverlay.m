@@ -92,8 +92,8 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
 
-    const char *sm = XGZeroHits() > 0 ? XGZeroMessage()
-                     : (XGSkipHits() > 0 ? XGSkipMessage() : XGScanMessage());
+    const char *sm = XGZBHits() > 0 ? XGZBMessage() : (XGZeroHits() > 0 ? XGZeroMessage()
+                     : (XGSkipHits() > 0 ? XGSkipMessage() : XGScanMessage()));
     NSString *text = [NSString stringWithFormat:@"%@\n计数：HP %d｜isDead %d｜CheckDie %d｜验证 %d\n%@",
         stateLine, XGCntCurHP2(), XGCntIsDead2(), XGCntCheckDie2(), XGCntVerify2(),
         (sm && sm[0]) ? [NSString stringWithUTF8String:sm] : @""];
@@ -149,9 +149,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"💥 清空敌人血量（精确）";
-        c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.95 blue:0.55 alpha:1.0];
-        c.detailTextLabel.text = @"EnemyInstance+0xF8 → EnemyData+0x38 的 Decimal 清零";
+        c.textLabel.text = @"🎯 清空战场敌人（终版）";
+        c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
+        c.detailTextLabel.text = @"Labyrinth.BattleZoneEnemy 静态链 + 关掉阻止死亡开关";
     } else if (ip.row == 1) {
         c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d）",
                             XG.conf.stageCurrent, XG.conf.stageTotal];
@@ -198,7 +198,7 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGZeroEnemiesAsync();
+        XGZeroBattleZoneAsync();
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
