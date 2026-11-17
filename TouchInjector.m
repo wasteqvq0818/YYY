@@ -12,7 +12,7 @@ typedef struct __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
 typedef CFTypeRef (*CreateClientFunc)(CFAllocatorRef);
 typedef void (*SetMatchingFunc)(IOHIDEventSystemClientRef, CFDictionaryRef);
 typedef void (*DispatchEventFunc)(IOHIDEventSystemClientRef, IOHIDEventRef);
-typedef void (*SetIntegerFunc)(IOHIDEventRef, IOHIDEventField, int64_t);
+typedef void (*SetIntegerFunc)(IOHIDEventRef, uint32_t, int64_t);
 typedef void (*SetSenderIDFunc)(IOHIDEventRef, uint64_t);
 typedef void (*SetFloatFunc)(IOHIDEventRef, IOHIDEventField, double);
 typedef IOHIDEventRef (*CreateFingerFunc)(CFAllocatorRef, AbsoluteTime, uint32_t, uint32_t,
@@ -22,6 +22,15 @@ typedef IOHIDEventRef (*CreateHandFunc)(CFAllocatorRef, AbsoluteTime, uint32_t, 
                                         uint32_t, uint32_t, uint32_t,
                                         double, double, double, double, double,
                                         uint32_t, uint32_t, u_int32_t);
+
+// mach_absolute_time() 返回 uint64_t，而 IOHIDEvent* 要 AbsoluteTime（struct UnsignedWide）
+static AbsoluteTime XGAbsoluteTimeNow(void) {
+    uint64_t t = mach_absolute_time();
+    AbsoluteTime at;
+    at.lo = (UInt32)(t & 0xFFFFFFFFULL);
+    at.hi = (UInt32)(t >> 32);
+    return at;
+}
 
 static CreateClientFunc  p_createClient;
 static SetMatchingFunc   p_setMatching;
@@ -84,7 +93,7 @@ static CreateHandFunc    p_createHand;
     if (!p_createFinger || !p_createHand) return NULL;
     // 手指事件：index=2 identity=1 tipPressure 0~1
     IOHIDEventRef finger = p_createFinger(kCFAllocatorDefault,
-                                          mach_absolute_time(),
+                                          XGAbsoluteTimeNow(),
                                           2,              // finger index
                                           1,              // identity
                                           down ? 1 : 0,   // eventMask: tip touch down/up
@@ -98,7 +107,7 @@ static CreateHandFunc    p_createHand;
 
     // 手事件（transducer type hand = 3）包住手指事件
     IOHIDEventRef hand = p_createHand(kCFAllocatorDefault,
-                                      mach_absolute_time(),
+                                      XGAbsoluteTimeNow(),
                                       3,                    // kIOHIDDigitizerTransducerTypeHand
                                       0,                    // index
                                       1,                    // identity
@@ -114,7 +123,7 @@ static CreateHandFunc    p_createHand;
     if (!ev) return;
     [self ensureClient];
     if (p_setSenderID) p_setSenderID(ev, _senderID);
-    if (p_setInteger)  p_setInteger(ev, (IOHIDEventField)0x1D9, 1); // hand 标记
+    if (p_setInteger)  p_setInteger(ev, (uint32_t)0x1D9, 1); // hand 标记
     if (_client && p_dispatch) p_dispatch(_client, ev);
     CFRelease(ev);
 }
