@@ -64,7 +64,7 @@ jobs:
           clang++ -dynamiclib \
             -target arm64-apple-ios15.0 \
             -isysroot "$SDK" \
-            -fuse-ld=ld64.lld \
+            --ld-path=/usr/bin/ld64.lld \
             -fobjc-arc \
             -O2 \
             -std=c++17 \
@@ -81,7 +81,7 @@ jobs:
           ls -lh XiuGou.dylib
           file XiuGou.dylib
           echo "--- 依赖 ---"
-          llvm-otool -L XiuGou.dylib 2>/dev/null || otool -L XiuGou.dylib 2>/dev/null || true
+          llvm-objdump --macho --dylibs-used XiuGou.dylib 2>/dev/null | head -20 || true
 
       - name: 签名
         run: |
