@@ -13,7 +13,7 @@ typedef struct Il2CppAssembly Il2CppAssembly;
 typedef struct Il2CppImage Il2CppImage;
 
 static Il2CppDomain *(*p_domain_get)(void);
-static const Il2CppAssembly *(*p_domain_get_assemblies)(const Il2CppDomain *, size_t *);
+static const Il2CppAssembly **(*p_domain_get_assemblies)(const Il2CppDomain *, size_t *);
 static Il2CppImage *(*p_assembly_get_image)(const Il2CppAssembly *);
 static Il2CppClass *(*p_image_get_class)(const Il2CppImage *, size_t);
 static size_t (*p_image_get_class_count)(const Il2CppImage *);
@@ -50,7 +50,7 @@ bool XGI2Init(void) {
     if (!h) h = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW);
 
     p_domain_get                = (Il2CppDomain *(*)(void))dlsym(h, "il2cpp_domain_get");
-    p_domain_get_assemblies     = (const Il2CppAssembly *(*)(const Il2CppDomain *, size_t *))dlsym(h, "il2cpp_domain_get_assemblies");
+    p_domain_get_assemblies     = (const Il2CppAssembly **(*)(const Il2CppDomain *, size_t *))dlsym(h, "il2cpp_domain_get_assemblies");
     p_assembly_get_image        = (Il2CppImage *(*)(const Il2CppAssembly *))dlsym(h, "il2cpp_assembly_get_image");
     p_image_get_class           = (Il2CppClass *(*)(const Il2CppImage *, size_t))dlsym(h, "il2cpp_image_get_class");
     p_image_get_class_count     = (size_t (*)(const Il2CppImage *))dlsym(h, "il2cpp_image_get_class_count");
@@ -94,11 +94,11 @@ Il2CppClass *XGI2Class(const char *name) {
     }
 
     size_t count = 0;
-    const Il2CppAssembly *asms = p_domain_get_assemblies(p_domain_get(), &count);
+    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &count);
     Il2CppClass *found = NULL;
 
     for (size_t a = 0; a < count && !found; a++) {
-        Il2CppImage *img = p_assembly_get_image(&asms[a]);
+        Il2CppImage *img = p_assembly_get_image(asms[a]);
         if (!img) continue;
         size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
         for (size_t c = 0; c < cc; c++) {
@@ -172,10 +172,10 @@ int XGI2DumpClassNames(const char *path) {
     if (!f) return 0;
 
     size_t count = 0;
-    const Il2CppAssembly *asms = p_domain_get_assemblies(p_domain_get(), &count);
+    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &count);
     int n = 0;
     for (size_t a = 0; a < count; a++) {
-        Il2CppImage *img = p_assembly_get_image(&asms[a]);
+        Il2CppImage *img = p_assembly_get_image(asms[a]);
         if (!img) continue;
         size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
         for (size_t c = 0; c < cc; c++) {
