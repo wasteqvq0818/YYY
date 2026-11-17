@@ -109,19 +109,23 @@ static UIWindow  *g_panelWindow = nil;
         [self presentViewController:a animated:YES completion:nil];
     } else {
         // 点参数行 → 弹出输入框改值
-        NSString *titles[] = { @"最大步数", @"求解预算(ms)", @"最低 combo" };
-        int *targets[] = { &XG.conf.maxSteps, &XG.conf.solveBudgetMs, &XG.conf.minCombos };
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:titles[ip.row]
+        // block 内不能捕获数组类型，先把要改的那一个指针单独取出来
+        NSString *title = (ip.row == 0) ? @"最大步数" : (ip.row == 1 ? @"求解预算(ms)" : @"最低 combo");
+        int *slot = (ip.row == 0) ? &XG.conf.maxSteps
+                   : (ip.row == 1 ? &XG.conf.solveBudgetMs : &XG.conf.minCombos);
+        int current = *slot;
+
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:title
                                                                   message:nil
                                                            preferredStyle:UIAlertControllerStyleAlert];
         [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
             tf.keyboardType = UIKeyboardTypeNumberPad;
-            tf.text = [NSString stringWithFormat:@"%d", *targets[ip.row]];
+            tf.text = [NSString stringWithFormat:@"%d", current];
         }];
         [a addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *act) {
             int v = [a.textFields.firstObject.text intValue];
-            if (v > 0) { *targets[ip.row] = v; XGSaveConfig(); [tv reloadData]; }
+            if (v > 0) { *slot = v; XGSaveConfig(); [tv reloadData]; }
         }]];
         [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
