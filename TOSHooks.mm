@@ -2012,3 +2012,67 @@ void XGMonitorStop(void) {
     snprintf(g_monMsg, sizeof(g_monMsg), "监视已停止");
     DLog("===== 监视结束 =====");
 }
+
+
+// ============================================================================
+//  v35 · 清空 BattleZoneEnemy
+//
+//  v34 监视日志里只抓到一条变化：敌人数 1 -> 0，而且没有任何 HP 变化。
+//  说明「过关」的判据可能不是敌人血量，而是这个列表还有没有元素。
+//
+//  做法极简：把 List<T> 的 _size(@0x18) 置 0。
+//  List 的 _items 数组还留着（不释放内存，避免 GC/野指针问题），
+//  只是长度变 0，游戏遍历时读不到任何元素。
+//
+//  比改血量安全得多：只写 4 字节，不碰对象内部。
+// ============================================================================
+
+static char g_clearMsg[256] = "未执行";
+const char *XGClearMsg(void) { return g_clearMsg; }
+
+void XGClearBattleZone(void) {
+    snprintf(g_clearMsg, sizeof(g_clearMsg), "执行中…");
+    DLog("\n===== 清空 BattleZoneEnemy %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_clearMsg, sizeof(g_clearMsg), "il2cpp 未就绪"); return; }
+
+            uintptr_t list = 0;
+            if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+                snprintf(g_clearMsg, sizeof(g_clearMsg), "BattleZoneEnemy 为空（不在战斗里）");
+                DLog("%s", g_clearMsg);
+                return;
+            }
+
+            int32_t before = 0, after = -1;
+            SafeRead(list + XG_ACC_LIST_SIZE, &before, 4);
+
+            // 只把 size 置 0，_items 保持不动
+            int32_t zero = 0;
+            BOOL ok = SafeWrite(list + XG_ACC_LIST_SIZE, &zero, 4);
+            SafeRead(list + XG_ACC_LIST_SIZE, &after, 4);
+
+            DLog("list=0x%lx size: %d -> %d  写入%s",
+                 (unsigned long)list, before, after, ok ? "成功" : "失败");
+
+            // 顺带把总敌人数也置 0
+            uintptr_t totalSlot = 0;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "totalBattleZoneEnemy", &totalSlot, 8)) {
+                // totalBattleZoneEnemy 是 int（值类型），读的是值本身
+                int32_t t = 0;
+                uintptr_t fieldPtr = XGI2StaticFieldPtr(XG_LAB_CLASS, "totalBattleZoneEnemy");
+                if (fieldPtr && SafeRead(fieldPtr, &t, 4)) {
+                    SafeWrite(fieldPtr, &zero, 4);
+                    DLog("totalBattleZoneEnemy: %d -> 0", t);
+                }
+            }
+
+            snprintf(g_clearMsg, sizeof(g_clearMsg),
+                     before > 0 ? "敌人数 %d → 0（已清空列表）" : "列表本来就是空的",
+                     before);
+            DLog("结果: %s", g_clearMsg);
+            NSLog(@"[XG] %s", g_clearMsg);
+        }
+    });
+}
