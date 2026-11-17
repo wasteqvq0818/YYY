@@ -33,11 +33,17 @@ bool XGI2Init(void);
 // 按类名找类（缓存）。name 传 C 字符串，例如 "EnemyData"
 Il2CppClass *XGI2Class(const char *name);
 
+// 找所有同名类（多程序集场景）。返回命中个数
+int XGI2FindAllClasses(const char *name, void **out, int maxN);
+
 // 按「类名 + 方法名 + 参数个数」拿方法入口指针（可直接给 MSHookFunction）
 void *XGI2Method(const char *className, const char *method, int argc);
 
 // MethodInfo*（hook 用：改它的首字段就是换函数指针）
 void *XGI2MethodInfo(const char *className, const char *method, int argc);
+
+// 给定 Il2CppClass* 取 MethodInfo
+void *XGI2MethodInfoOfClass(void *klass, const char *method, int argc);
 
 // 字段偏移（实例字段）。失败返回 0
 uint32_t XGI2FieldOff(const char *className, const char *field);
