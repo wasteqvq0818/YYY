@@ -92,7 +92,8 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
     const char *sm;
-    if (XGPatchEnemyCount() > 0) sm = XGPatchMsg();
+    if (XGWaveMsg()[0] != '未') sm = XGWaveMsg();
+    else if (XGPatchEnemyCount() > 0) sm = XGPatchMsg();
     else if (XGCallRan())      sm = XGCallDieMsg();
     else if (XGKillRan())      sm = XGKillMessage();
     else if (XGZBRan())        sm = XGZBMessage();
@@ -162,14 +163,14 @@ static UIWindow *XGHostWindow(void) {
         c.detailTextLabel.text = @"调 Labyrinth.Victory()，立刻结算但跳过掉落流程";
     } else if (ip.row == 2) {
         BOOL on = XGInlineCount() > 0;
-        c.textLabel.text = on ? @"🔨 inline hook 已装" : @"🔨 装 inline hook（备用）";
-        c.detailTextLabel.text = @"改函数机器码";
+        c.textLabel.text = @"📊 读取波次字段（诊断）";
+        c.detailTextLabel.text = @"dump 总波数/当前阶段，确认 2/50 存在哪个字段";
     } else if (ip.row == 3) {
-        c.textLabel.text = @"⚡ 扫描并清场（旧，可能崩）";
-        c.detailTextLabel.text = @"按旧偏移改，可能命中历史对象";
+        c.textLabel.text = @"🎯 关卡值改成 1（打一波就胜）";
+        c.detailTextLabel.text = @"老教程做法：displayTotalWave = 1";
     } else if (ip.row == 4) {
-        c.textLabel.text = @"📋 导出游戏偏好设置（plist）";
-        c.detailTextLabel.text = @"看 MH_CACHE_GAMEPLAY_DATA_* —— XiuGou 可能改的就是这个";
+        c.textLabel.text = @"⏭ 跳关值推到末尾（N/N）";
+        c.detailTextLabel.text = @"StartWave 推到总波数，触发过关";
     } else {
         c.textLabel.text = @"🔄 刷新状态";
         c.detailTextLabel.text = @"扫描是后台跑的，状态不会自动刷";
@@ -217,16 +218,20 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
     } else if (ip.row == 2) {
-        if (XGInlineCount() == 0) XGInstallInlineHooks();
-        [self refreshHeader]; [tv reloadData];
-    } else if (ip.row == 3) {
-        XGScanAsync();
+        XGWaveProbe();
         [self refreshHeader];
-    } else if (ip.row == 4) {
-        XGDumpPrefsAsync();
-        [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
+    } else if (ip.row == 3) {
+        XGSetTotalWaveOne();
+        [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+    } else if (ip.row == 4) {
+        XGJumpToLastWave();
+        [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else {
         [self refreshHeader]; [tv reloadData];
     }
