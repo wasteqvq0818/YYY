@@ -1,0 +1,9 @@
+﻿* text=auto eol=lf
+*.yml      text eol=lf
+Makefile   text eol=lf
+*.plist    text eol=lf
+control    text eol=lf
+*.xm       text eol=lf
+*.m        text eol=lf
+*.c        text eol=lf
+*.h        text eol=lf
