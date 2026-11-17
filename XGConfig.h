@@ -81,6 +81,7 @@ int  XGCntCurHP(void);
 int  XGCntMaxHP(void);
 int  XGCntIsDead(void);
 int  XGCntCheckDie(void);
+int  XGCntVerify(void);   // 验证 hook（UpdateRound）的调用次数
 void XGResetCounters(void);
 int  XGScanState(void);
 const char *XGScanMessage(void);
