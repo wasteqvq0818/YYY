@@ -48,6 +48,8 @@ typedef struct {
     int   solveBudgetMs;
     int   minCombos;
     int   scanIntervalMs;    // 扫描间隔（毫秒）
+    int   stageCurrent;      // 跳关用：当前第几关（游戏里显示的 3/7 的 3）
+    int   stageTotal;        // 跳关用：总共几关（7）
     BOOL  dryRun;            // 只扫描不改
 } XGConfT;
 
@@ -78,6 +80,10 @@ int  XGInstallDeadHook(void);
 void XGRemoveDeadHook(void);
 int  XGDeadHookInstalled(void);
 int  XGInstallInlineHooks(void);
+void XGSkipStageAsync(void);
+int  XGSkipHits(void);
+int  XGSkipChanged(void);
+const char *XGSkipMessage(void);
 int  XGInlineCount(void);
 int  XGCntIsDead2(void);
 int  XGCntCheckDie2(void);
