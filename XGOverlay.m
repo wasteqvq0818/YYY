@@ -109,29 +109,22 @@ static UIWindow *XGHostWindow(void) {
 
 // 面板顶部直接显示「探测状态 + 文件真实路径」，省得用户到处翻
 - (void)refreshStatusHeader {
-    NSString *state;
-    switch (XGProbeState) {
-        case 1:  state = [NSString stringWithFormat:@"✅ 完成 %d 字节", XGProbeBytes]; break;
-        case 2:  state = @"❌ 失败（所有路径都写不进去）"; break;
-        default: state = @"⏳ 未开始"; break;
-    }
-    NSString *path = XGProbePathBuf[0]
-        ? [NSString stringWithUTF8String:XGProbePathBuf]
-        : @"(还没生成，等 10~30 秒后下拉刷新)";
+    int n = XGLastKillCount();
+    NSString *state = XG.on[F_FAST_WIN] ? @"开（进战斗自动清场）" : @"关";
+    NSString *text = [NSString stringWithFormat:@"直接胜利：%@\n上次清场：%d 个敌人对象", state, n];
 
-    NSString *text = [NSString stringWithFormat:@"探测: %@\n文件: %@", state, path];
-    UIFont *font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    UIFont *font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     CGSize maxSz = CGSizeMake(self.tableView.bounds.size.width - 32, CGFLOAT_MAX);
     CGRect r = [text boundingRectWithSize:maxSz
                                   options:NSStringDrawingUsesLineFragmentOrigin
                                attributes:@{NSFontAttributeName: font}
                                   context:nil];
-
     UILabel *hdr = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, maxSz.width, r.size.height + 16)];
     hdr.numberOfLines = 0;
     hdr.font = font;
-    hdr.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
-    hdr.text = [NSString stringWithFormat:@"  %@", [text stringByReplacingOccurrencesOfString:@"\n" withString:@"\n  "]];
+    hdr.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
+    hdr.text = [NSString stringWithFormat:@"  %@",
+                [text stringByReplacingOccurrencesOfString:@"\n" withString:@"\n  "]];
     self.tableView.tableHeaderView = hdr;
 }
 
@@ -174,7 +167,7 @@ static UIWindow *XGHostWindow(void) {
                     c.detailTextLabel.text = [NSString stringWithFormat:@"%d", XG.conf.solveBudgetMs]; break;
             case 2: c.textLabel.text = @"最低 combo";
                     c.detailTextLabel.text = [NSString stringWithFormat:@"%d", XG.conf.minCombos]; break;
-            case 3: c.textLabel.text = @"▶ 预览最优解";
+            case 3: c.textLabel.text = @"▶ 立即清场";
                     c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0]; break;
         }
     }
@@ -198,7 +191,7 @@ static UIWindow *XGHostWindow(void) {
         char buf[512] = {0};
         int combo = XGSolvePreview(buf, sizeof(buf));
         UIAlertController *a = [UIAlertController
-            alertControllerWithTitle:[NSString stringWithFormat:@"combo = %d", combo]
+            alertControllerWithTitle:@"清场结果"
                              message:[NSString stringWithUTF8String:buf]
                       preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
