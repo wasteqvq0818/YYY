@@ -1530,3 +1530,86 @@ void XGCallEnemyDieAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v31 · dump 游戏的 NSUserDefaults
+//
+//  依据社区资料（iOS plist 分析）：
+//    游戏的战斗数据存在 Library/Preferences/com.madhead.tos.zh.plist，
+//    每次转珠只写这一个文件，字段形如：
+//      MH_CACHE_GAMEPLAY_DATA_ALL            ← 战斗细节数据
+//      MH_CACHE_GAMEPLAY_DATA_DECREASE_CD    ← 含 Hash 和回合数
+//    服务器判断作弊也只用这个文件。
+//
+//  XiuGou 只读内存不写内存却能改状态，很可能就是改了这个数据源。
+//  这里先把全部 key dump 出来看清结构（零风险：标准 API，不碰内存）。
+// ============================================================================
+
+static char g_prefsMsg[256] = "未导出";
+
+const char *XGDumpPrefsMsg(void) { return g_prefsMsg; }
+
+void XGDumpPrefsAsync(void) {
+    snprintf(g_prefsMsg, sizeof(g_prefsMsg), "导出中…");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @autoreleasepool {
+            NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+                              stringByAppendingPathComponent:@"XG_prefs.txt"];
+            if (!path) path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_prefs.txt"];
+
+            FILE *f = fopen(path.UTF8String, "w");
+            if (!f) {
+                snprintf(g_prefsMsg, sizeof(g_prefsMsg), "无法创建 %s", path.UTF8String);
+                return;
+            }
+
+            NSDictionary *all = [[NSUserDefaults standardUserDefaults] dictionaryRepresentation];
+            fprintf(f, "===== NSUserDefaults dump =====\n");
+            fprintf(f, "time: %s\n", [[NSDate date] description].UTF8String);
+            fprintf(f, "bundle: %s\n", [[NSBundle mainBundle] bundleIdentifier].UTF8String);
+            fprintf(f, "key count: %lu\n\n", (unsigned long)all.count);
+
+            NSArray *keys = [[all allKeys] sortedArrayUsingSelector:@selector(compare:)];
+            int nMH = 0, nOther = 0;
+            for (NSString *k in keys) {
+                id v = all[k];
+                NSString *vs = [v description];
+                if (vs.length > 4000) vs = [[vs substringToIndex:4000] stringByAppendingString:@"...(截断)"];
+
+                BOOL mh = ([k rangeOfString:@"MH_" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                           [k rangeOfString:@"GAMEPLAY" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                           [k rangeOfString:@"BATTLE" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                           [k rangeOfString:@"CACHE" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                           [k rangeOfString:@"STAGE" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                           [k rangeOfString:@"WAVE" options:NSCaseInsensitiveSearch].location != NSNotFound);
+                if (mh) nMH++; else nOther++;
+
+                fprintf(f, "%s%s = %s\n",
+                        mh ? "★ " : "  ",
+                        k.UTF8String,
+                        vs.UTF8String);
+            }
+
+            fprintf(f, "\n===== 摘要 =====\n");
+            fprintf(f, "战斗相关 key: %d\n其它 key: %d\n", nMH, nOther);
+
+            // 额外：把 Preferences 目录也列一下，确认实际 plist 文件名
+            NSString *prefDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences"];
+            NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:prefDir error:nil];
+            fprintf(f, "\n===== Library/Preferences 文件 =====\n");
+            for (NSString *fn in files) {
+                NSDictionary *attr = [[NSFileManager defaultManager]
+                                      attributesOfItemAtPath:[prefDir stringByAppendingPathComponent:fn] error:nil];
+                fprintf(f, "  %s  (%llu bytes)\n", fn.UTF8String,
+                        [attr[NSFileSize] unsignedLongLongValue]);
+            }
+
+            fclose(f);
+            snprintf(g_prefsMsg, sizeof(g_prefsMsg),
+                     "已导出 %lu 个 key（战斗相关 %d）→ XG_prefs.txt",
+                     (unsigned long)all.count, nMH);
+            NSLog(@"[XG] %s", g_prefsMsg);
+        }
+    });
+}
