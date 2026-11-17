@@ -68,6 +68,10 @@ void *XGI2StaticData(const char *className);
 const char *XGI2ClassName(void *klass);
 const char *XGI2ClassNamespace(void *klass);
 
+// 用运行时 API 读静态字段的值（推荐，避免手算偏移）
+bool   XGI2StaticFieldValue(const char *className, const char *field, void *out, int size);
+size_t XGI2FieldOffset(const char *className, const char *field);
+
 // 调方法：obj 传实例（静态方法传 NULL），params 是参数地址数组
 // 返回返回值指针或 NULL，exc 非空表示托管异常
 void *XGI2Invoke(void *methodInfo, void *obj, void **params, void **exc);
