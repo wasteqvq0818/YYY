@@ -44,6 +44,8 @@ static const char    *(*p_field_get_name)(FieldInfo *);
 static size_t         (*p_field_get_offset)(FieldInfo *);      // ★ 单参数
 static uint32_t       (*p_method_get_param_count)(const MethodInfo *);
 static void          *(*p_runtime_invoke)(const void *, void *, void **, void **);
+static void          *(*p_class_get_static_field_data)(Il2CppClass *);
+static void           (*p_runtime_class_init)(Il2CppClass *);
 
 static bool g_ready = false;
 static char g_err[256];
@@ -74,6 +76,10 @@ bool XGI2Init(void) {
     p_method_get_param_count  = (uint32_t (*)(const MethodInfo *))dlsym(h, "il2cpp_method_get_param_count");
     p_runtime_invoke          = (void *(*)(const void *, void *, void **, void **))
                                 dlsym(h, "il2cpp_runtime_invoke");
+    p_class_get_static_field_data = (void *(*)(Il2CppClass *))
+                                dlsym(h, "il2cpp_class_get_static_field_data");
+    p_runtime_class_init      = (void (*)(Il2CppClass *))
+                                dlsym(h, "il2cpp_runtime_class_init");
 
     if (!p_domain_get || !p_class_get_name) {
         snprintf(g_err, sizeof(g_err), "il2cpp 符号缺失（不是 IL2CPP 进程？）");
@@ -181,6 +187,76 @@ uint32_t XGI2FieldOffOfClass(void *klass, const char *field) {
     FieldInfo *f = XGI2FindField((Il2CppClass *)klass, field);
     if (!f) return 0;
     return (uint32_t)p_field_get_offset(f);
+}
+
+// ---- 静态字段 ----
+uintptr_t XGI2StaticFieldPtr(const char *className, const char *field) {
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return 0;
+    if (p_runtime_class_init) p_runtime_class_init(k);   // 确保 cctor 执行
+    if (!p_class_get_static_field_data) return 0;
+    void *sd = p_class_get_static_field_data(k);
+    if (!sd) return 0;
+    FieldInfo *f = XGI2FindField(k, field);
+    if (!f || !p_field_get_offset) return 0;
+    size_t off = p_field_get_offset(f);
+    uintptr_t v = 0;
+    memcpy(&v, (char *)sd + off, sizeof(v));
+    return v;
+}
+
+// ---- 多路单例 ----
+void *XGI2GetInstanceMulti(const char *className) {
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return NULL;
+
+    // 1) 静态字段
+    static const char *sf[] = { "Instance", "_instance", "_getInstance",
+                                "mInstance", "s_Instance", "Current", NULL };
+    for (int i = 0; sf[i]; i++) {
+        uintptr_t v = XGI2StaticFieldPtr(className, sf[i]);
+        if (v) {
+            PLog("[instance] %s.%s = %p", className, sf[i], (void *)v);
+            return (void *)v;
+        }
+    }
+    // 2) 静态方法
+    static const char *sm[] = { "get_Instance", "get_instance", "Instance",
+                                "get_Current", "Current", "get_CurrentPuzzle", NULL };
+    for (int i = 0; sm[i]; i++) {
+        void *m = XGI2Method(className, sm[i], 0);
+        if (m) {
+            void *r = XGI2Invoke(m, NULL, NULL, NULL);
+            if (r) {
+                PLog("[instance] %s::%s() = %p", className, sm[i], r);
+                return r;
+            }
+        }
+    }
+    PLog("[instance] %s 拿不到实例（静态字段/方法都没命中）", className);
+    return NULL;
+}
+
+void XGI2DumpStaticFields(const char *className) {
+    Il2CppClass *k = XGI2Class(className);
+    if (!k || !p_class_get_static_field_data) return;
+    if (p_runtime_class_init) p_runtime_class_init(k);
+    void *sd = p_class_get_static_field_data(k);
+    if (!sd) { PLog("[static] %s: static data 为空", className); return; }
+    PLog("[static] %s 静态字段:", className);
+    void *it = NULL;
+    int n = 0;
+    while (n < 60) {
+        FieldInfo *f = p_class_get_fields(k, &it);
+        if (!f) break;
+        size_t off = p_field_get_offset ? p_field_get_offset(f) : 0;
+        if (off > 0x400) continue;
+        uintptr_t v = 0;
+        memcpy(&v, (char *)sd + off, sizeof(v));
+        const char *fn = p_field_get_name ? p_field_get_name(f) : "?";
+        PLog("  S %-34s @0x%zx = %p", fn, off, (void *)v);
+        n++;
+    }
 }
 
 // ---- 方法入口 ----
