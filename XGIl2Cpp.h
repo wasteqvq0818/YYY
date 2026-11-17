@@ -64,6 +64,11 @@ void XGI2ProbeConfigured(void);
 // 返回写入的字节数
 int XGI2ProbeToFile(const char *path);
 
+// 探测结果的实际落盘路径与大小（面板直接显示，省得用户到处找）
+extern char XGProbePathBuf[512];
+extern int  XGProbeBytes;
+extern int  XGProbeState;   // 0=未跑 1=成功 2=失败
+
 // 调试：把所有类名写到 path（一行一个），用于离线 grep
 int XGI2DumpClassNames(const char *path);
 
