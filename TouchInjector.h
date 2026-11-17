@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+@class UIWindow;   // 只用到指针，前向声明即可
+
 /// 触摸注入（自瞄用）。用于那些"朝向完全由触摸输入驱动"的 FPS/MOBA。
 /// 走私有 API IOHIDEventSystemClient，把合成的手指事件直接送进 HID 事件流，
 /// 不经过 UIKit 的 hit-testing，因此对"只 patch 触摸回调"的轻量反作弊也有效。
