@@ -87,23 +87,19 @@ static UIWindow *XGHostWindow(void) {
 }
 
 - (void)refreshHeader {
-    const char *m = XGScanMessage();
-    int st = XGScanState();
+    BOOL hooked = XGDeadHookInstalled() != 0;
+    NSString *stateLine = hooked ? @"✅ Hook 已装（进战斗生效）" : @"⭕️ Hook 未装";
+    UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
+                            : [UIColor colorWithWhite:0.75 alpha:1.0];
 
-    NSString *stateLine;
-    UIColor *color;
-    switch (st) {
-        case 1:  stateLine = @"⏳ 扫描中…"; color = [UIColor colorWithRed:1.0 green:0.8 blue:0.3 alpha:1.0]; break;
-        case 2:  stateLine = @"✅ 上次扫描完成"; color = [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]; break;
-        default: stateLine = @"⭕️ 还没扫过"; color = [UIColor colorWithWhite:0.75 alpha:1.0]; break;
-    }
-
-    NSString *samples = @"";
-    const char *si = XGSampleInfo();
-    if (si && si[0]) samples = [NSString stringWithFormat:@"\n样本:\n%s", si];
-
-    NSString *text = [NSString stringWithFormat:@"%@\n%@%@", stateLine,
-                      m ? [NSString stringWithUTF8String:m] : @"", samples];
+    const char *sm = XGScanMessage();
+    NSString *text = [NSString stringWithFormat:
+        @"%@
+调用计数：HPsetter %d｜isDead %d｜CheckDie %d
+%@",
+        stateLine,
+        XGCntCurHP(), XGCntIsDead(), XGCntCheckDie(),
+        (sm && sm[0]) ? [NSString stringWithUTF8String:sm] : @""];
 
     UIFont *font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     CGSize maxSz = CGSizeMake(self.tableView.bounds.size.width - 32, CGFLOAT_MAX);
@@ -146,7 +142,7 @@ static UIWindow *XGHostWindow(void) {
     if (ip.row == 0) {
         c.textLabel.text = @"⚡ 扫描并清场";
         c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0];
-        c.detailTextLabel.text = @"在战斗界面点这个：扫内存找敌人，血量归零";
+        c.detailTextLabel.text = @"旧方案（改内存），现在优先用下面的 Hook";
     } else if (ip.row == 1) {
         BOOL on = XGDeadHookInstalled() != 0;
         c.textLabel.text = on ? @"🔨 Hook 已装（点此卸载）" : @"🔨 装 Hook（血量+死亡判定）";
