@@ -59,31 +59,71 @@ static uintptr_t XGImageBase(const char *hint) {
 }
 
 // ============================================================================
-//  2. 盘面读取
+//  2. 盘面读取（实测链路）
+//     Puzzle 实例 → Puzzle._puzzleGems(0x158) → PuzzleGem._element(0xbc)
+//     PuzzleGem.pos(0x60) 是格位索引，_puzzleGems 可能是 Il2CppArray 或 List<T>
 // ============================================================================
-static uintptr_t g_boardRoot   = 0;
-static uintptr_t g_battleRoot  = 0;
+static uintptr_t g_puzzle = 0;
 
-static BOOL XGReadBoard(TOSBoard *out) {
-    if (!out || !g_boardRoot) return NO;
-    uintptr_t arr = g_boardRoot + XG_BOARD_ARRAY_OFF;
-
-    if (XG_BOARD_ELEM_BYTE) {
-        int8_t raw[TOS_SIZE] = {};
-        if (!XGRead(arr, raw, sizeof(raw))) return NO;
-        memcpy(out->attr, raw, TOS_SIZE);
-    } else {
-        int32_t raw[TOS_SIZE] = {};
-        if (!XGRead(arr, raw, sizeof(raw))) return NO;
-        for (int i = 0; i < TOS_SIZE; i++) out->attr[i] = (int8_t)raw[i];
-    }
-    // 值域闸：全部落在 0..5 才认为读对了，防止读错对象让求解器乱走
-    for (int i = 0; i < TOS_SIZE; i++) {
-        if (out->attr[i] < 0 || out->attr[i] > 5) return NO;
-    }
-    return YES;
+/// 实测结论：Puzzle 有大量小偏移字段（0x0/0x4/0x8/0x18...）→ 那些是静态字段，
+/// 所以实例很可能挂在静态字段上，用多路尝试拿。
+static uintptr_t XGPuzzle(void) {
+    if (g_puzzle) return g_puzzle;
+    g_puzzle = (uintptr_t)XGI2GetInstanceMulti(XG_PUZZLE_CLASS);
+    if (g_puzzle) NSLog(@"[XG] Puzzle 实例 = 0x%lx", (unsigned long)g_puzzle);
+    return g_puzzle;
 }
 
+/// 从容器取出「元素指针数组」起始地址，兼容 Il2CppArray 与 List<T>
+static uintptr_t XGContainerData(uintptr_t container, int *countOut) {
+    *countOut = 0;
+    if (!container) return 0;
+
+    // List<T>：+0x10 = items(Il2CppArray*)，+0x18 = size
+    uintptr_t items = XGReadV<uintptr_t>(container + XG_OFF_LIST_ITEMS);
+    int32_t   size  = XGReadV<int32_t>(container + XG_OFF_LIST_SIZE);
+    if (items && size > 0 && size <= 300) {
+        *countOut = size;
+        return items + XG_OFF_ARRAY_DATA;
+    }
+
+    // Il2CppArray：+0x18 = max_length，数据从 +0x20 开始
+    int32_t len = XGReadV<int32_t>(container + XG_OFF_ARRAY_LENGTH);
+    if (len > 0 && len <= 300) {
+        *countOut = len;
+        return container + XG_OFF_ARRAY_DATA;
+    }
+    return 0;
+}
+
+static BOOL XGReadBoard(TOSBoard *out) {
+    if (!out) return NO;
+    uintptr_t puzzle = XGPuzzle();
+    if (!puzzle) return NO;
+
+    uintptr_t gems = XGReadV<uintptr_t>(puzzle + XG_OFF_PUZZLE_GEMS);
+    if (!gems) return NO;
+
+    int count = 0;
+    uintptr_t data = XGContainerData(gems, &count);
+    if (!data || count < TOS_SIZE) return NO;
+
+    memset(out->attr, -1, sizeof(out->attr));
+    int filled = 0;
+    for (int i = 0; i < count; i++) {
+        uintptr_t gem = XGReadV<uintptr_t>(data + (uintptr_t)i * sizeof(uintptr_t));
+        if (!gem) continue;
+        int32_t el  = XGReadV<int32_t>(gem + XG_OFF_GEM_ELEMENT);
+        int32_t pos = XGReadV<int32_t>(gem + XG_OFF_GEM_POS);
+        if (el < 0 || el > 5) continue;
+        if (pos < 0 || pos >= TOS_SIZE) continue;
+        out->attr[pos] = (int8_t)el;
+        filled++;
+    }
+    return filled >= 20;      // 至少 20 格有效
+}
+
+// ============================================================================
 // ============================================================================
 //  3. 自动转珠
 // ============================================================================
@@ -158,76 +198,113 @@ int XGSolvePreview(char *out, int cap) {
 }
 
 // ============================================================================
-//  4. 快速胜利 —— 调用式实现（不做 hook）
+//  4. 快速胜利
 //
-//  为什么改成"调用"而不是"hook 受伤函数"：
-//    hook 需要 Substrate，TrollStore 没有；而 IL2CPP 暴露了 runtime_invoke，
-//    可以直接调用游戏自己的结算/伤害方法，效果一样但零依赖。
+//  实测结论：全量扫描 31,404 个类后确认，游戏没有 Result/Win/Settle 这类命名，
+//  所以「直接调结算方法」这条路不存在。快速胜利只能走：
+//      清空当前波次所有敌人的 HP → 让游戏自己触发全灭判定 → 自己走结算上报
+//  这反而是最自然的路径（服务端看到的是游戏自己算出来的胜利）。
+//
+//  敌人链路：WaveData._enemies(0x18) 或 GameplayWaveData.<EnemyDatas>(0x10)
+//           → EnemyData.currentHP(0x24) / _mCurrentHP(0x38)
+//
+//  注意 EnemyInstance 上有两个防秒杀开关（_isPreventInstantKill @0x48、cannotDie @0x8a），
+//  Boss 会开；清场改的是 EnemyData 的 HP 字段，绕开这两个 flag。
 // ============================================================================
 
-// 4.1 清场：把敌人列表的 HP / alive 写 0
-//     注意：这里只调游戏自己的"重算存活"逻辑，不直接判定胜负
-static int XGKillAllViaList(void) {
-    uintptr_t battle = g_battleRoot;
-    if (!battle && XG_BATTLE_ROOT_PTR_OFF) {
-        uintptr_t base = XGImageBase("UnityFramework");
-        if (base) battle = XGReadV<uintptr_t>(base + XG_BATTLE_ROOT_PTR_OFF);
-    }
-    if (!battle) return 0;
+static void XGWriteBytes(uintptr_t addr, const void *data, size_t len) {
+    if (!addr || !data) return;
+    uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1);
+    vm_protect(mach_task_self(), (vm_address_t)page, PAGE_SIZE,
+               FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+    vm_write(mach_task_self(), (vm_address_t)addr, (vm_offset_t)data,
+             (mach_msg_type_number_t)len);
+}
 
-    uintptr_t list = XGReadV<uintptr_t>(battle + XG_OFF_ENEMY_LIST);
-    if (!list) return 0;
+static int XGKillAllEnemies(void) {
+    uintptr_t wave = (uintptr_t)XGI2GetInstanceMulti(XG_WAVE_CLASS);
+    if (!wave) wave = (uintptr_t)XGI2GetInstanceMulti(XG_GWAVE_CLASS);
+    if (!wave) { NSLog(@"[XG] 拿不到 WaveData 实例"); return 0; }
 
-    uintptr_t items = XGReadV<uintptr_t>(list + 0x10);
-    int32_t   n     = XGReadV<int32_t>(list + 0x18);
-    if (!items || n <= 0 || n > 64) return 0;
+    uintptr_t list = XGReadV<uintptr_t>(wave + XG_OFF_WAVE_ENEMIES);
+    if (!list) list = XGReadV<uintptr_t>(wave + XG_OFF_GWAVE_ENEMY_DATAS);
+    if (!list) { NSLog(@"[XG] WaveData 里没有敌人列表"); return 0; }
 
-    uintptr_t data = items + 0x20;
+    int count = 0;
+    uintptr_t data = XGContainerData(list, &count);
+    if (!data || count <= 0) { NSLog(@"[XG] 敌人列表为空"); return 0; }
+
     int killed = 0;
-    for (int i = 0; i < n; i++) {
-        uintptr_t ent = XGReadV<uintptr_t>(data + (uintptr_t)i * sizeof(uintptr_t));
-        if (!ent) continue;
+    for (int i = 0; i < count && i < 64; i++) {
+        uintptr_t e = XGReadV<uintptr_t>(data + (uintptr_t)i * sizeof(uintptr_t));
+        if (!e) continue;
+        int32_t hpSimple = XGReadV<int32_t>(e + XG_OFF_ENEMY_HP_SIMPLE);
+        int32_t hpFull   = XGReadV<int32_t>(e + XG_OFF_ENEMY_HP_FULL);
         int32_t zero = 0;
-        // 写内存：TrollStore 的 App 有 no-sandbox，直接 mach_vm_write 可用
-        uintptr_t page = (ent + XG_OFF_ENEMY_HP) & ~(PAGE_SIZE - 1);
-        vm_protect(mach_task_self(), (vm_address_t)page, PAGE_SIZE,
-                   FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-        vm_write(mach_task_self(), (vm_address_t)(ent + XG_OFF_ENEMY_HP),
-                      (vm_offset_t)&zero, sizeof(zero));
-        if (XG_OFF_ENEMY_ALIVE) {
-            int8_t a = 0;
-            vm_write(mach_task_self(), (vm_address_t)(ent + XG_OFF_ENEMY_ALIVE),
-                          (vm_offset_t)&a, sizeof(a));
-        }
-        killed++;
+        if (hpSimple > 0) { XGWriteBytes(e + XG_OFF_ENEMY_HP_SIMPLE, &zero, 4); killed++; }
+        if (hpFull   > 0) { XGWriteBytes(e + XG_OFF_ENEMY_HP_FULL,   &zero, 4); killed++; }
+        int8_t dead = 1;
+        XGWriteBytes(e + XG_OFF_ENEMY_DEAD, &dead, 1);
     }
-    if (killed) NSLog(@"[XG] 清场 %d 个敌人（游戏会自己判定胜利并走正常结算）", killed);
+    if (killed) NSLog(@"[XG] 清场：%d 个敌人 HP 归零（敌人共 %d 个）", killed, count);
     return killed;
 }
 
-// 4.2 直接调结算方法：拿到 Settle 实例 → 调结算/胜利方法
-static int XGCallSettle(void) {
-    void *inst = XGI2Instance(XG_SETTLE_CLASS);
-    if (!inst) {
-        NSLog(@"[XG] %s 的 Instance 拿不到（可能不在战斗中）", XG_SETTLE_CLASS);
-        return 0;
+// ---- 盘面验证：v6 装上后，probe 文件末尾会直接出现读到的 30 格 ----
+void XGProbeBoardDump(void) {
+    if (!XGProbePathBuf[0]) return;
+    FILE *f = fopen(XGProbePathBuf, "a");
+    if (!f) return;
+
+    fprintf(f, "\n\n########## v6 盘面验证 ##########\n");
+
+    // 1) 各种静态字段尝试
+    static const char *cands[] = { "Instance", "_instance", "_getInstance",
+                                   "mInstance", "s_Instance", "Current", NULL };
+    for (int i = 0; cands[i]; i++) {
+        uintptr_t v = XGI2StaticFieldPtr(XG_PUZZLE_CLASS, cands[i]);
+        fprintf(f, "  静态字段 %-14s = 0x%lx\n", cands[i], (unsigned long)v);
     }
-    void *m = XGI2Method(XG_SETTLE_CLASS, XG_SETTLE_METHOD, XG_FASTWIN_WIN_ARGC);
-    if (!m) {
-        NSLog(@"[XG] 方法 %s/%d 不存在，用 XGI2DumpMethods 探一下真实名字",
-              XG_SETTLE_METHOD, XG_FASTWIN_WIN_ARGC);
-        return 0;
+
+    uintptr_t puzzle = XGPuzzle();
+    fprintf(f, "  Puzzle 实例         = 0x%lx\n", (unsigned long)puzzle);
+    if (puzzle) {
+        uintptr_t gems = XGReadV<uintptr_t>(puzzle + XG_OFF_PUZZLE_GEMS);
+        int cnt = 0;
+        uintptr_t data = XGContainerData(gems, &cnt);
+        fprintf(f, "  _puzzleGems         = 0x%lx\n", (unsigned long)gems);
+        fprintf(f, "  元素数组            = 0x%lx   数量=%d\n", (unsigned long)data, cnt);
+
+        for (int i = 0; i < cnt && i < 40; i++) {
+            uintptr_t g = XGReadV<uintptr_t>(data + (uintptr_t)i * sizeof(uintptr_t));
+            if (!g) continue;
+            int32_t el  = XGReadV<int32_t>(g + XG_OFF_GEM_ELEMENT);
+            int32_t lv  = XGReadV<int32_t>(g + XG_OFF_GEM_LV);
+            int32_t pos = XGReadV<int32_t>(g + XG_OFF_GEM_POS);
+            fprintf(f, "    gem[%2d] @0x%-10lx el=%d lv=%d pos=%d\n",
+                    i, (unsigned long)g, el, lv, pos);
+        }
     }
-    void *params[1] = { NULL };
-    BOOL t = YES;
-    if (XG_FASTWIN_WIN_ARGC >= 1) params[0] = &t;
-    void *exc = NULL;
-    XGI2Invoke(m, inst, params, &exc);
-    if (exc) { NSLog(@"[XG] 结算方法抛异常（参数不匹配？）"); return 0; }
-    NSLog(@"[XG] 已调用 %s::%s", XG_SETTLE_CLASS, XG_SETTLE_METHOD);
-    return 1;
+
+    TOSBoard b;
+    BOOL ok = XGReadBoard(&b);
+    fprintf(f, "\n  盘面读取: %s\n", ok ? "√ 成功" : "× 失败");
+    if (ok) {
+        for (int y = 0; y < TOS_H; y++) {
+            fprintf(f, "    ");
+            for (int x = 0; x < TOS_W; x++)
+                fprintf(f, "%s ", tos_attr_name(b.attr[y * TOS_W + x]));
+            fprintf(f, "\n");
+        }
+    }
+
+    fprintf(f, "\n  敌人清场测试: ");
+    int k = XGKillAllEnemies();
+    fprintf(f, k ? "清掉 %d 个\n" : "没找到敌人（可能不在战斗中）\n", k);
+    fclose(f);
 }
 
+// ============================================================================
 // ============================================================================
 //  5. 主循环
 // ============================================================================
@@ -266,8 +343,8 @@ static void XGTick(void) {
             g_lastWin = now;
             switch (XG.conf.fastWinMode) {
                 case 1: XGFastWinSetSpeed((float)XG.conf.gameSpeed); break;
-                case 2: if (!XGKillAllViaList()) NSLog(@"[XG] 清场失败：%@", XGFastWinStatus()); break;
-                case 3: if (!XGCallSettle()) XGKillAllViaList(); break;
+                case 2: if (!XGKillAllEnemies()) NSLog(@"[XG] 清场失败：%@", XGFastWinStatus()); break;
+                case 3: XGKillAllEnemies(); break;   // 全量扫描证实无结算类，本档等同清场
                 default: break;
             }
         }
@@ -278,7 +355,7 @@ static void XGTick(void) {
             XGSettleReport rep;
             if (XGSettlementGenerate(&XG.settle, &rep)) {
                 NSLog(@"[XG] 战报: %@", XGSettlementDescribe(&rep));
-                if (!XGSettlementApply(&rep)) XGKillAllViaList();
+                if (!XGSettlementApply(&rep)) XGKillAllEnemies();
             }
         }
 
@@ -341,6 +418,8 @@ static void XGBoot(void) {
                     @autoreleasepool {
                         int bytes = XGI2ProbeToFile(NULL);
                         NSLog(@"[XG] === 字段探测完成：%d 字节 ===", bytes);
+                        XGProbeBoardDump();          // 追加盘面验证 + 清场测试
+                        NSLog(@"[XG] === 盘面验证已写入探测文件 ===");
                     }
                 });
             }
