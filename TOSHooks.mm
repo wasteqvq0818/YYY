@@ -1282,3 +1282,134 @@ void XGZeroBattleZoneAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v28 终版 · 清血 + 主动触发死亡
+//
+//  v27 的 XG_diag 已证明全链路可用：
+//    ⑤ ok=1 list=… fieldOffset=0xe0
+//    ⑥ List items/size 正确，count=1
+//    ⑦ 清血=1 成功
+//  但敌人没死 —— 说明死亡判定不看血量，需要主动触发。
+//
+//  v14 调 Die() 崩溃，是因为用的是扫描出来的垃圾对象；现在从
+//  Labyrinth.BattleZoneEnemy 拿到的是游戏自己维护的真实实例，调用安全。
+//
+//  顺序：清血 → 关防秒杀 → 置 _isDead → 调 CheckDie/Die → 调 Labyrinth 的结束判定
+// ============================================================================
+
+static volatile int g_killChanged = 0, g_killRan = 0;
+static char g_killMsg[384] = "未执行";
+
+int  XGKillChanged(void) { return g_killChanged; }
+int  XGKillRan(void) { return g_killRan; }
+const char *XGKillMessage(void) { return g_killMsg; }
+
+void XGKillBattleZoneAsync(void) {
+    if (g_state == 1) { snprintf(g_killMsg, sizeof(g_killMsg), "上一次还在跑"); return; }
+    g_state = 1;
+    g_killChanged = 0;
+    g_killRan = 1;
+    snprintf(g_killMsg, sizeof(g_killMsg), "执行中…");
+    DLog("\n===== 击杀 %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_killMsg, sizeof(g_killMsg), "il2cpp 未就绪"); g_state = 3; return; }
+
+            // 1. 关掉阻止开关
+            int disarmed = 0;
+            uintptr_t mbDie = 0, mbBar = 0;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEnemyDie", &mbDie, 8) && mbDie > 0x10000) {
+                DisarmManagedBool(mbDie); disarmed++;
+            }
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockChangeHPBar", &mbBar, 8) && mbBar > 0x10000) {
+                DisarmManagedBool(mbBar); disarmed++;
+            }
+
+            // 2. 拿战场敌人列表
+            uintptr_t list = 0;
+            if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+                snprintf(g_killMsg, sizeof(g_killMsg), "BattleZoneEnemy 读不到/为空");
+                g_state = 3; return;
+            }
+            uintptr_t items = 0; int32_t count = 0;
+            SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+            SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
+            if (!items || count <= 0 || count > 64) {
+                snprintf(g_killMsg, sizeof(g_killMsg), "列表异常 items=0x%lx count=%d",
+                         (unsigned long)items, count);
+                g_state = 3; return;
+            }
+
+            // 3. 拿方法（真实实例上调用，安全）
+            void *kInst  = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+            void *kData  = XGI2Class(XG_ENEMY_CLASS);
+            void *mCheck = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "CheckDie", 0);
+            void *mDie0  = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 0);
+            void *mDie1  = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 1);
+            DLog("方法: CheckDie=%p Die/0=%p Die/1=%p", mCheck, mDie0, mDie1);
+
+            int cleared = 0, died = 0, invited = 0;
+            uint8_t zero16[XG_ACC_DECIMAL_SIZE];
+            memset(zero16, 0, sizeof(zero16));
+
+            for (int i = 0; i < count; i++) {
+                uintptr_t inst = 0;
+                if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
+                if (kInst && ReadKlass(inst) != kInst) {
+                    DLog("  [%d] inst=0x%lx klass 不匹配", i, (unsigned long)inst);
+                    continue;
+                }
+
+                // 3.1 清血
+                uintptr_t mData = 0;
+                if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000) {
+                    if (!kData || ReadKlass(mData) == kData) {
+                        SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
+                        SafeWrite(mData + XG_ACC_DATA_MAX_HP, zero16, sizeof(zero16));
+                        cleared++;
+                    }
+                }
+                float zf = 0.0f;
+                SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
+
+                // 3.2 关防秒杀
+                uint8_t b0 = 0;
+                SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
+                SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
+
+                // 3.3 标死
+                uint8_t b1 = 1;
+                SafeWrite(inst + XG_ACC_INST_ISDEAD, &b1, 1);
+
+                // 3.4 触发死亡判定（真实实例，安全）
+                void *exc = NULL;
+                if (mCheck) {
+                    XGI2Invoke(mCheck, (void *)inst, NULL, &exc);
+                    if (!exc) invited++;
+                    exc = NULL;
+                }
+                if (mDie0) {
+                    XGI2Invoke(mDie0, (void *)inst, NULL, &exc);
+                    if (!exc) died++;
+                    exc = NULL;
+                } else if (mDie1) {
+                    void *arg = (void *)1;
+                    void **ps = (void **)&arg;
+                    XGI2Invoke(mDie1, (void *)inst, ps, &exc);
+                    if (!exc) died++;
+                }
+            }
+
+            g_killChanged = cleared;
+            g_state = 2;
+            snprintf(g_killMsg, sizeof(g_killMsg),
+                     "敌人%d｜清血%d｜CheckDie%d｜Die%d｜关开关%d",
+                     count, cleared, invited, died, disarmed);
+            DLog("结果: %s", g_killMsg);
+            NSLog(@"[XG] %s", g_killMsg);
+        }
+    });
+}
