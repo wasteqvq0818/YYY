@@ -1,4 +1,4 @@
-﻿TARGET := iphone:clang:latest:15.0
+TARGET := iphone:clang:latest:15.0
 ARCHS = arm64 arm64e
 
 # 神魔之塔 com.madhead.tos.zh
@@ -12,7 +12,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = XiuGou
 
-XiuGou_FILES = TOSHooks.xm TOSBoard.c XGConfig.m XGOverlay.m XGIl2Cpp.m XGFastWin.m XGSettlement.m TouchInjector.m
+XiuGou_FILES = TOSHooks.mm TOSBoard.c XGConfig.m XGOverlay.m XGIl2Cpp.m XGFastWin.m XGSettlement.m TouchInjector.m
 XiuGou_CFLAGS = -fobjc-arc -Wno-everything -Wno-deprecated-declarations -O2
 XiuGou_FRAMEWORKS = UIKit Foundation QuartzCore CoreGraphics
 XiuGou_LIBRARIES = substrate
