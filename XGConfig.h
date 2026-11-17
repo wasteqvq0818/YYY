@@ -131,6 +131,8 @@ void XGAutoKillStop(void);
 int  XGAutoKillActive(void);
 int  XGAutoKillTotal(void);
 void XGAutoKillTickOnce(void);
+void XGDirectWinOrdered(void);   // 清列表 → Victory → Victory2（按 XG 的真实顺序）
+const char *XGDirectWinMsg(void);
 void XGForceVictoryNow(void);   // 直接调 Labyrinth.Victory()
 const char *XGVictoryMsg(void);
 void XGKillAllStart(void);     // 连续杀：每 0.25s 处理一个敌人
