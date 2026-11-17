@@ -53,7 +53,11 @@ void XGLoadConfig(void);
 void XGSaveConfig(void);
 const char *XGFeatureName(XGFeature f);
 
-// 由 TOSHooks.mm 提供
+// 由 TOSHooks.mm 提供（放在这个带 extern "C" 保护的头里，
+// 避免 XGOverlay.m(C) 与 TOSHooks.mm(ObjC++) 之间符号名不匹配）
+void XGScanAsync(void);
+int  XGScanState(void);
+const char *XGScanMessage(void);
 int  XGLastKillCount(void);
 
 #ifdef __cplusplus
