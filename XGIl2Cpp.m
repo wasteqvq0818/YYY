@@ -269,7 +269,8 @@ static FILE *g_pf = NULL;
 static void PLog(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    if (g_pf) { vfprintf(g_pf, fmt, ap); fputc('\n', g_pf); fflush(g_pf); }
+    // 不要每行 fflush：几十万行会把闪存刷爆，主线程直接卡死
+    if (g_pf) { vfprintf(g_pf, fmt, ap); fputc('\n', g_pf); }
     va_end(ap);
 }
 
@@ -321,7 +322,7 @@ static int dumpAllClasses(FILE *f) {
                     uint32_t off = p_field_get_offset ? (uint32_t)(uintptr_t)p_field_get_offset(k, fn) : 0;
                     PLog("  F %-34s @0x%x", fn, off);
                     nf++;
-                    if (nf > 120) break;
+                    if (nf > 40) break;   // 字段上限，防止超大类拖慢
                 }
             }
             if (p_class_get_methods && p_method_get_name) {
@@ -336,7 +337,7 @@ static int dumpAllClasses(FILE *f) {
                     void *code = *(void **)m;
                     PLog("  M %-34s /%u  @ %p", mn, argc, code);
                     nm2++;
-                    if (nm2 > 160) break;
+                    if (nm2 > 60) break;   // 方法上限
                 }
             }
         }
@@ -376,6 +377,7 @@ int XGI2ProbeToFile(const char *path) {
         int n = dumpAllClasses(f);
         PLog("\n=== 共导出 %d 个类 ===", n);
 
+        if (g_pf) fflush(g_pf);   // 只在这里刷一次
         g_pf = NULL;
         fclose(f);
         NSLog(@"[XG-I2] probe -> %@ (%d classes)", p, n);
