@@ -29,6 +29,25 @@ extern "C" {
 #define XG_OFF_EI_DEAD           0x90     // _isDead
 #define XG_OFF_EI_PREDICT_HP     0x38     // predictHP（血条显示值）
 
+// ---- 以下偏移全部来自 dump.cs（metadata v39，Il2CppDumper-lxraa 实跑）----
+//      EnemyInstance:
+//        predictHP @0x38 (float)  _isDead @0x90 (bool)  cannotDie @0x8A (bool)
+//        _isPreventInstantKill @0x48 (ManagedBoolWithSkillParam*，指针)
+//        mData @0xF8 (EnemyData*)   ← 实例到数据的真实引用
+//      EnemyData:
+//        _mMaxHP @0x28 (Number)  _mCurrentHP @0x38 (Number)  mExists @0x18 (EnemyInstance*)
+//      Number = struct { Decimal _val; }  → 16 字节
+//      Decimal 布局: lo@+0, mid@+4, hi@+8, flags@+12
+#define XG_ACC_INST_MDATA         0xF8
+#define XG_ACC_INST_PREDICT_HP    0x38
+#define XG_ACC_INST_ISDEAD        0x90
+#define XG_ACC_INST_CANNOTDIE     0x8A
+#define XG_ACC_INST_PREVENT_KILL  0x48
+#define XG_ACC_DATA_CUR_HP        0x38
+#define XG_ACC_DATA_MAX_HP        0x28
+#define XG_ACC_DATA_EXISTS        0x18
+#define XG_ACC_DECIMAL_SIZE       16
+
 // ---- 方法名（来自 XG_methods.txt 全量方法扫描，46,963 类 / 226,963 方法）----
 #define XG_BATTLE_CTRL_CLASS     "Labyrinth"        // 战斗控制器（有 Victory/GameOver/CheckEndBattleZone）
 #define XG_VICTORY_METHOD        "Victory"          // 直接触发胜利
@@ -80,6 +99,10 @@ int  XGInstallDeadHook(void);
 void XGRemoveDeadHook(void);
 int  XGDeadHookInstalled(void);
 int  XGInstallInlineHooks(void);
+void XGZeroEnemiesAsync(void);   // 精确清血（走 EnemyInstance.mData 链）
+int  XGZeroHits(void);
+int  XGZeroChanged(void);
+const char *XGZeroMessage(void);
 void XGSkipStageAsync(void);
 int  XGSkipHits(void);
 int  XGSkipChanged(void);
