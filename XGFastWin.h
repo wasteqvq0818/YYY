@@ -1,7 +1,13 @@
 #ifndef XG_FASTWIN_H
 #define XG_FASTWIN_H
 
+
+
 #import <Foundation/Foundation.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // ============================================================================
 //  快速胜利模块
@@ -30,4 +36,8 @@ void XGFastWinSetSpeed(float mult);
 // 供面板显示当前状态
 NSString *XGFastWinStatus(void);
 
+
+#ifdef __cplusplus
+}
+#endif
 #endif
