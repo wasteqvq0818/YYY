@@ -1,5 +1,6 @@
 #import "XGOverlay.h"
 #import "XGConfig.h"
+#import "XGIl2Cpp.h"
 #include "TOSBoard.h"
 #include <stdio.h>
 
@@ -94,10 +95,44 @@ static UIWindow *XGHostWindow(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"XiuGou";
+    [self refreshStatusHeader];
     self.tableView.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1.0];
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStyleDone
                                         target:self action:@selector(close)];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self refreshStatusHeader];
+}
+
+// 面板顶部直接显示「探测状态 + 文件真实路径」，省得用户到处翻
+- (void)refreshStatusHeader {
+    NSString *state;
+    switch (XGProbeState) {
+        case 1:  state = [NSString stringWithFormat:@"✅ 完成 %d 字节", XGProbeBytes]; break;
+        case 2:  state = @"❌ 失败（所有路径都写不进去）"; break;
+        default: state = @"⏳ 未开始"; break;
+    }
+    NSString *path = XGProbePathBuf[0]
+        ? [NSString stringWithUTF8String:XGProbePathBuf]
+        : @"(还没生成，等 10~30 秒后下拉刷新)";
+
+    NSString *text = [NSString stringWithFormat:@"探测: %@\n文件: %@", state, path];
+    UIFont *font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    CGSize maxSz = CGSizeMake(self.tableView.bounds.size.width - 32, CGFLOAT_MAX);
+    CGRect r = [text boundingRectWithSize:maxSz
+                                  options:NSStringDrawingUsesLineFragmentOrigin
+                               attributes:@{NSFontAttributeName: font}
+                                  context:nil];
+
+    UILabel *hdr = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, maxSz.width, r.size.height + 16)];
+    hdr.numberOfLines = 0;
+    hdr.font = font;
+    hdr.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
+    hdr.text = [NSString stringWithFormat:@"  %@", [text stringByReplacingOccurrencesOfString:@"\n" withString:@"\n  "]];
+    self.tableView.tableHeaderView = hdr;
 }
 
 - (void)close {
