@@ -247,6 +247,27 @@ static void PFlush(const char *mark) {
     fflush(g_pf);
 }
 
+// 精确白名单：从上一轮探测的 2155 个真实类名里挑出来的核心类
+// （上一轮因为词根过滤太宽，detail 名额被 AS_*/BS_* 技能类占满，核心类没拿到字段）
+static const char *kExactTargets[] = {
+    // 盘面
+    "Puzzle", "PuzzleData", "PuzzleGem", "PuzzleGemM", "PuzzleM",
+    "PuzzleLayout", "PuzzleGemLib", "MovePuzzleGem", "PuzzleBlockM",
+    "BattlePuzzleDisplay",
+    // 敌人 / 怪物
+    "EnemyData", "EnemyInstance", "GameplayEnemyData", "GameplayMonsterData",
+    "PlayerMonsterData", "PlayerMonsterInstance",
+    // 波次
+    "WaveData", "GameplayWaveData",
+    NULL
+};
+
+static bool keepExact(const char *nm) {
+    for (int i = 0; kExactTargets[i]; i++)
+        if (strcmp(nm, kExactTargets[i]) == 0) return true;
+    return false;
+}
+
 static const char *kKeep[] = {
     "Settle", "Battle", "Board", "Puzzle", "Enemy", "Monster",
     "WaveData", "StageData", "GemBoard", "Combo", "SkillCtrl",
@@ -303,8 +324,7 @@ static int phaseB(void) {
 struct DetailCtx { int classes; };
 static void detailCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) {
     struct DetailCtx *c = (struct DetailCtx *)ctx;
-    if (!keepClass(nm)) return;
-    if (c->classes > 400) return;          // 最多详情 400 个类
+    if (!keepExact(nm)) return;           // 只认白名单里的精确类名
 
     PLog("\n### %s.%s", ns, nm);
     c->classes++;
@@ -312,7 +332,7 @@ static void detailCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) 
     if (p_class_get_fields && p_field_get_name && p_field_get_offset) {
         void *it = NULL;
         int nf = 0;
-        while (nf < 40) {
+        while (nf < 200) {
             FieldInfo *f = p_class_get_fields(k, &it);
             if (!f) break;
             const char *fn = p_field_get_name(f);
@@ -325,8 +345,12 @@ static void detailCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) 
     if (p_class_get_method_from_name) {
         // 方法遍历没有稳定 API，退而用命名知识：探几个常见名字
         static const char *common[] = {
-            "DoSettleRounds", "Settle", "GetSettleResult", "OnStageClear",
-            "Start", "Update", "Awake", "get_Instance", NULL
+            // 上一轮发现的真实方法名线索 + 常见 lifecycle / 单例
+            "DoSettleRounds", "Settle", "OnStageClear", "GetSettleResult",
+            "Start", "Update", "Awake", "get_Instance", "get_Current",
+            "GetEnemies", "GetMonsters", "GetPuzzle", "ResetPuzzle",
+            "Move", "MoveGem", "ChangePuzzle", "RandomPuzzle", "DestroyPuzzle",
+            NULL
         };
         static const int argcs[] = { 0, 1, 2 };
         for (int i = 0; common[i]; i++) {
