@@ -118,6 +118,10 @@ int  XGInstallDeadHook(void);
 void XGRemoveDeadHook(void);
 int  XGDeadHookInstalled(void);
 int  XGInstallInlineHooks(void);
+void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_invoke）
+int  XGCallOk(void);
+int  XGCallFail(void);
+const char *XGCallDieMsg(void);
 void XGKillBattleZoneAsync(void);   // 终版：清血 + 触发死亡判定（用真实实例）
 int  XGKillChanged(void);
 int  XGKillRan(void);
