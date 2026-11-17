@@ -167,6 +167,22 @@ Il2CppClass *XGI2Class(const char *name) {
     return f.found;
 }
 
+// ---- 找所有同名类（游戏有多个程序集，同名类可能有 3~6 份，
+//      必须全部 hook，否则可能挂在没人用的那一个上）----
+struct AllCtx { const char *want; void **out; int maxN; int n; };
+static void allCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) {
+    struct AllCtx *c = (struct AllCtx *)ctx;
+    if (!c->want || strcmp(nm, c->want) != 0) return;
+    if (c->n >= c->maxN) return;
+    c->out[c->n++] = k;
+}
+int XGI2FindAllClasses(const char *name, void **out, int maxN) {
+    if (!name || !out || maxN <= 0) return 0;
+    struct AllCtx c = { name, out, maxN, 0 };
+    walkClasses(allCb, &c);
+    return c.n;
+}
+
 // ---- 按名找字段（FieldInfo*），offset 只认 FieldInfo* ----
 FieldInfo *XGI2FindField(Il2CppClass *k, const char *field) {
     if (!k || !field || !p_class_get_fields || !p_field_get_name) return NULL;
@@ -270,6 +286,12 @@ void XGI2DumpStaticFields(const char *className) {
 // ---- 方法入口 ----
 // 返回 MethodInfo*（不是它首字段里的函数指针）——
 // 改 MethodInfo 首字段 = IL2CPP 特有的 hook 方式：不动代码段，只改 8 字节数据
+// 给定已拿到的 Il2CppClass* 取 MethodInfo（多副本场景用）
+void *XGI2MethodInfoOfClass(void *klass, const char *method, int argc) {
+    if (!klass || !method || !p_class_get_method_from_name) return NULL;
+    return (void *)p_class_get_method_from_name((Il2CppClass *)klass, method, argc);
+}
+
 void *XGI2MethodInfo(const char *className, const char *method, int argc) {
     if (!XGI2Init() || !p_class_get_method_from_name) return NULL;
     Il2CppClass *k = XGI2Class(className);
