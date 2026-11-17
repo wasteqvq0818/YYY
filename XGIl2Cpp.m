@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <time.h>
 
 // ============================================================================
 //  IL2CPP 导出符号（全部 dlsym 拿，不硬链 —— 硬链在符号缺失时会让 dylib 整个加载失败）
@@ -254,4 +256,131 @@ void XGI2ProbeConfigured(void) {
         if (!k) { NSLog(@"[XG-I2] (缺) %s", classes[i]); continue; }
         XGI2DumpFields(classes[i]);
     }
+}
+
+
+// ============================================================================
+//  探测结果落盘
+//  iOS 非越狱设备上 NSLog 只能通过 Console.app / idevicesyslog 看，
+//  直接写文件最省事：装完插件跑一次，用 Filza 把文件拷出来即可。
+// ============================================================================
+static FILE *g_pf = NULL;
+
+static void PLog(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    if (g_pf) { vfprintf(g_pf, fmt, ap); fputc('\n', g_pf); fflush(g_pf); }
+    va_end(ap);
+}
+
+static void PLogC(NSString *s) {
+    if (!s) return;
+    PLog("%s", s.UTF8String);
+}
+
+/// 遍历全部 image 的全部类，写「类名 -> 字段+偏移 / 方法+入口」
+static int dumpAllClasses(FILE *f) {
+    if (!XGI2Init() || !f) return 0;
+    if (!p_domain_get_assemblies || !p_assembly_get_image) return 0;
+
+    size_t count = 0;
+    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &count);
+    if (!asms) return 0;
+
+    int total = 0;
+    for (size_t a = 0; a < count; a++) {
+        Il2CppImage *img = p_assembly_get_image(asms[a]);
+        if (!img) continue;
+        size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
+        for (size_t c = 0; c < cc; c++) {
+            Il2CppClass *k = p_image_get_class(img, c);
+            if (!k) continue;
+            const char *nm = p_class_get_name(k);
+            if (!nm) continue;
+
+            // 只记录关心词根的类，避免文件过大
+            bool keep = strstr(nm, "Settle") || strstr(nm, "Battle") || strstr(nm, "Board") ||
+                        strstr(nm, "Puzzle") || strstr(nm, "Enemy") || strstr(nm, "Monster") ||
+                        strstr(nm, "Wave") || strstr(nm, "Stage") || strstr(nm, "Gem") ||
+                        strstr(nm, "Combo") || strstr(nm, "Skill") || strstr(nm, "Player") ||
+                        strstr(nm, "Team") || strstr(nm, "Deck") || strstr(nm, "Orb");
+            if (!keep) continue;
+
+            const char *ns = p_class_get_namespace ? p_class_get_namespace(k) : "";
+            PLog("\n### %s.%s", ns ? ns : "", nm);
+            total++;
+
+            if (p_class_get_fields && p_field_get_name) {
+                void *it = NULL;
+                int nf = 0;
+                while (1) {
+                    void *fd = p_class_get_fields(k, &it);
+                    if (!fd) break;
+                    const char *fn = p_field_get_name(fd);
+                    if (!fn) continue;
+                    uint32_t off = p_field_get_offset ? (uint32_t)(uintptr_t)p_field_get_offset(k, fn) : 0;
+                    PLog("  F %-34s @0x%x", fn, off);
+                    nf++;
+                    if (nf > 120) break;
+                }
+            }
+            if (p_class_get_methods && p_method_get_name) {
+                void *it = NULL;
+                int nm2 = 0;
+                while (1) {
+                    void *m = p_class_get_methods(k, &it);
+                    if (!m) break;
+                    const char *mn = p_method_get_name(m);
+                    if (!mn) continue;
+                    uint32_t argc = p_method_get_param_count ? p_method_get_param_count(m) : 0;
+                    void *code = *(void **)m;
+                    PLog("  M %-34s /%u  @ %p", mn, argc, code);
+                    nm2++;
+                    if (nm2 > 160) break;
+                }
+            }
+        }
+    }
+    return total;
+}
+
+int XGI2ProbeToFile(const char *path) {
+    if (!XGI2Init()) return 0;
+
+    NSString *target = path ? [NSString stringWithUTF8String:path] : nil;
+    NSMutableArray<NSString *> *cands = [NSMutableArray array];
+    if (target) [cands addObject:target];
+    [cands addObject:@"/var/mobile/Documents/XG_probe.txt"];
+    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    if (docs) [cands addObject:[docs stringByAppendingPathComponent:@"XG_probe.txt"]];
+    [cands addObject:[NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_probe.txt"]];
+
+    for (NSString *p in cands) {
+        NSString *dir = [p stringByDeletingLastPathComponent];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        FILE *f = fopen(p.UTF8String, "w");
+        if (!f) continue;
+
+        g_pf = f;
+        PLog("=== XiuGou probe  %s ===", [[NSDate date] description].UTF8String);
+        PLog("bundle=%s  pid=%d", [[[NSBundle mainBundle] bundleIdentifier] UTF8String], getpid());
+
+        const struct mach_header_64 *hdr = NULL;
+        for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+            const char *nm = _dyld_get_image_name(i);
+            if (nm && strstr(nm, "UnityFramework")) { hdr = (void *)_dyld_get_image_header(i); break; }
+        }
+        PLog("UnityFramework base = %p", hdr);
+
+        int n = dumpAllClasses(f);
+        PLog("\n=== 共导出 %d 个类 ===", n);
+
+        g_pf = NULL;
+        fclose(f);
+        NSLog(@"[XG-I2] probe -> %@ (%d classes)", p, n);
+        return (int)[[NSFileManager defaultManager] attributesOfItemAtPath:p error:nil].fileSize;
+    }
+    NSLog(@"[XG-I2] probe 无法写入任何路径");
+    return 0;
 }
