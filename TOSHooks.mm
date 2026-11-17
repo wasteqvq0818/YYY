@@ -2139,3 +2139,126 @@ void XGAutoStop(void) {
     DLog("===== 自动过关关闭（本次清了 %d 次）=====", g_autoCleared);
     NSLog(@"[XG] 自动过关已关闭");
 }
+
+
+// ============================================================================
+//  v37 · 走游戏自己的死亡流程
+//
+//  v35 实测：清空 BattleZoneEnemy 只能让波次推进，敌人模型留在画面上、
+//  要转珠才进下一小关 —— 因为那只是绕过流程，没触发流程。
+//
+//  原版 XG 的效果是「模型消失 + 结算 + 直接过关」，这些只有游戏的
+//  EnemyDie() 流程会做（销毁、掉落、波次结束都在里面）。
+//
+//  v28 用 il2cpp_runtime_invoke 调它会崩：runtime_invoke 要做参数封送、
+//  异常包装、线程状态切换，在注入环境里会破坏游戏状态。
+//
+//  这版直接调 methodPointer —— 它就是编译好的原生函数地址，
+//  按签名跳过去执行，不做任何中间处理。
+// ============================================================================
+
+static char g_dieCallMsg[384] = "未执行";
+const char *XGDieCallMsg(void) { return g_dieCallMsg; }
+
+void XGDieCallAsync(void) {
+    snprintf(g_dieCallMsg, sizeof(g_dieCallMsg), "执行中…");
+    DLog("\n===== 走死亡流程 %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_dieCallMsg, sizeof(g_dieCallMsg), "il2cpp 未就绪"); return; }
+
+            // 1. 关掉阻止开关（否则死亡流程会被拦）
+            uintptr_t mbDie = 0, mbBar = 0;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEnemyDie", &mbDie, 8) && mbDie > 0x10000)
+                DisarmManagedBool(mbDie);
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockChangeHPBar", &mbBar, 8) && mbBar > 0x10000)
+                DisarmManagedBool(mbBar);
+
+            // 2. 拿战场敌人
+            uintptr_t list = 0;
+            if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+                snprintf(g_dieCallMsg, sizeof(g_dieCallMsg), "BattleZoneEnemy 为空（不在战斗中）");
+                DLog("%s", g_dieCallMsg);
+                return;
+            }
+            uintptr_t items = 0; int32_t count = 0;
+            SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+            SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
+            if (!items || count <= 0 || count > 32) {
+                snprintf(g_dieCallMsg, sizeof(g_dieCallMsg), "列表异常 count=%d", count);
+                DLog("%s", g_dieCallMsg);
+                return;
+            }
+
+            // 3. 拿方法指针（methodPointer = 原生函数地址）
+            void *mpEnemyDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "EnemyDie", 0);
+            void *mpDie1     = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 1);
+            void *mpDie0     = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 0);
+            DLog("methodPointer: EnemyDie()=%p Die(bool)=%p Die()=%p",
+                 mpEnemyDie, mpDie1, mpDie0);
+
+            if (!mpEnemyDie && !mpDie1 && !mpDie0) {
+                snprintf(g_dieCallMsg, sizeof(g_dieCallMsg), "三个死亡方法都没拿到");
+                return;
+            }
+
+            void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+            void *kData = XGI2Class(XG_ENEMY_CLASS);
+
+            int called = 0, left = 0;
+            uint8_t zero16[XG_ACC_DECIMAL_SIZE];
+            memset(zero16, 0, sizeof(zero16));
+
+            for (int i = 0; i < count; i++) {
+                uintptr_t inst = 0;
+                if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
+                if (kInst && ReadKlass(inst) != kInst) { DLog("  [%d] klass 不符", i); continue; }
+
+                // 3.1 先把血量清 0（让死亡判定成立）
+                uintptr_t mData = 0;
+                if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000 &&
+                    (!kData || ReadKlass(mData) == kData)) {
+                    SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
+                }
+                float zf = 0.0f;
+                SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
+                uint8_t b0 = 0;
+                SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
+                SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
+
+                // 3.2 直接调 methodPointer（不经 runtime_invoke）
+                DLog("  [%d] inst=0x%lx 调用死亡流程", i, (unsigned long)inst);
+                if (mpEnemyDie) {
+                    ((void (*)(void *))mpEnemyDie)((void *)inst);
+                    called++;
+                } else if (mpDie1) {
+                    ((void (*)(void *, uint8_t))mpDie1)((void *)inst, 1);
+                    called++;
+                } else if (mpDie0) {
+                    ((void (*)(void *))mpDie0)((void *)inst);
+                    called++;
+                }
+                DLog("  [%d] 调用返回", i);
+            }
+
+            // 4. 兜底：调用后列表如果还有元素，清空它
+            int32_t afterCount = 0;
+            SafeRead(list + XG_ACC_LIST_SIZE, &afterCount, 4);
+            if (afterCount > 0) {
+                left = afterCount;
+                int32_t zero = 0;
+                SafeWrite(list + XG_ACC_LIST_SIZE, &zero, 4);
+                uintptr_t fp = XGI2StaticFieldPtr(XG_LAB_CLASS, "totalBattleZoneEnemy");
+                if (fp) SafeWrite(fp, &zero, 4);
+                DLog("  兜底：列表原剩 %d 个，已清空", left);
+            }
+
+            snprintf(g_dieCallMsg, sizeof(g_dieCallMsg),
+                     "调用了 %d 次死亡流程%s",
+                     called, left > 0 ? "（列表已兜底清空）" : "（列表已被游戏清空 ✓）");
+            DLog("结果: %s", g_dieCallMsg);
+            NSLog(@"[XG] %s", g_dieCallMsg);
+        }
+    });
+}
