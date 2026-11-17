@@ -133,7 +133,7 @@ static UIWindow *XGHostWindow(void) {
     return @"操作";
 }
 
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 2; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 3; }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
@@ -147,6 +147,10 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.text = @"⚡ 扫描并清场";
         c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0];
         c.detailTextLabel.text = @"在战斗界面点这个：扫内存找敌人，血量归零";
+    } else if (ip.row == 1) {
+        c.textLabel.text = @"🔍 扫描方法名（找胜利函数）";
+        c.textLabel.textColor = [UIColor colorWithRed:0.45 green:0.7 blue:1.0 alpha:1.0];
+        c.detailTextLabel.text = @"遍历所有类的方法名，找 settle/win/die 等，结果写文件";
     } else {
         c.textLabel.text = @"🔄 刷新状态";
         c.detailTextLabel.text = @"扫描是后台跑的，状态不会自动刷";
@@ -163,6 +167,13 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+    } else if (ip.row == 1) {
+        XGScanMethodsAsync();
+        [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else {
         [self refreshHeader];
