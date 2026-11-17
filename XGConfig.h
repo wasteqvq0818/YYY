@@ -119,8 +119,13 @@ void XGRemoveDeadHook(void);
 int  XGDeadHookInstalled(void);
 int  XGInstallInlineHooks(void);
 void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_invoke）
+
+// dump 游戏的 NSUserDefaults（XiuGou 可能走的是改 plist/偏好这条路）
+void XGDumpPrefsAsync(void);
+const char *XGDumpPrefsMsg(void);
 int  XGCallOk(void);
 int  XGCallFail(void);
+int  XGCallRan(void);
 const char *XGCallDieMsg(void);
 void XGKillBattleZoneAsync(void);   // 终版：清血 + 触发死亡判定（用真实实例）
 int  XGKillChanged(void);
