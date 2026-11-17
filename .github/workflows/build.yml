@@ -65,6 +65,9 @@ jobs:
             -target arm64-apple-ios15.0 \
             -isysroot "$SDK" \
             --ld-path=/usr/bin/ld64.lld \
+            -Wl,-arch,arm64 \
+            -Wl,-platform_version,ios,15.0,16.5 \
+            -Wl,-syslibroot,"$SDK" \
             -fobjc-arc \
             -O2 \
             -Wno-everything \
