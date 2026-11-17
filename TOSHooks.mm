@@ -494,3 +494,98 @@ void XGRemoveHPHook(void) {
     snprintf(g_callMsg, sizeof(g_callMsg), "Hook 已卸载");
     NSLog(@"[XG] Hook 已卸载");
 }
+
+
+// ============================================================================
+//  v16：加调用计数 + hook 死亡判定
+//
+//  v15 只 hook 了 set_mCurrentHP，装上了但没效果。两种可能必须区分：
+//    A. 该 setter 根本没被调用（游戏内部直接写 _mCurrentHP 字段，绕过属性）
+//    B. 调用了但值被别处覆盖
+//  所以每个 hook 都加计数器，面板直接显示调用次数。
+//
+//  同时新增更彻底的 hook：
+//    EnemyInstance.get_isDead  返回 true  → 任何 if(isDead) 都成立
+//    EnemyInstance.CheckDie    返回 true  → 死亡判定永远通过
+// ============================================================================
+
+static volatile int g_cntCurHP = 0;
+static volatile int g_cntMaxHP = 0;
+static volatile int g_cntIsDead = 0;
+static volatile int g_cntCheckDie = 0;
+
+static void *g_miIsDead = NULL,   *g_origIsDead = NULL;
+static void *g_miCheckDie = NULL, *g_origCheckDie = NULL;
+static int   g_deadHookOn = 0;
+
+// ---- 计数版 HP setter ----
+static void my2_setCurrentHP(void *self, int64_t value) {
+    g_cntCurHP++;
+    if (g_origCurHP) ((void (*)(void *, int64_t))g_origCurHP)(self, 0);
+}
+static void my2_setMaxHP(void *self, int64_t value) {
+    g_cntMaxHP++;
+    if (g_origMaxHP) ((void (*)(void *, int64_t))g_origMaxHP)(self, 1);
+}
+
+// ---- get_isDead：永远 true ----
+// IL2CPP 的 bool 返回走 w0（低字节）
+static uint8_t my_get_isDead(void *self) {
+    g_cntIsDead++;
+    return 1;
+}
+
+// ---- CheckDie：永远 true ----
+static uint8_t my_CheckDie(void *self) {
+    g_cntCheckDie++;
+    return 1;
+}
+
+int XGDeadHookInstalled(void) { return g_deadHookOn; }
+int XGCntCurHP(void)    { return g_cntCurHP; }
+int XGCntMaxHP(void)    { return g_cntMaxHP; }
+int XGCntIsDead(void)   { return g_cntIsDead; }
+int XGCntCheckDie(void) { return g_cntCheckDie; }
+
+void XGResetCounters(void) {
+    g_cntCurHP = g_cntMaxHP = g_cntIsDead = g_cntCheckDie = 0;
+}
+
+static int hookOne(void *mi, void *repl, void **origOut) {
+    if (!mi) return 0;
+    void **slot = (void **)mi;
+    if (origOut && !*origOut) *origOut = *slot;
+    void *r = repl;
+    return SafeWrite((uintptr_t)slot, &r, sizeof(r)) ? 1 : 0;
+}
+
+// 装全套 hook：HP setter（计数版）+ isDead + CheckDie
+int XGInstallDeadHook(void) {
+    if (!XGI2Init()) { snprintf(g_callMsg, sizeof(g_callMsg), "il2cpp 未就绪"); return 0; }
+
+    int n = 0;
+    // 1. HP setter 换成计数版
+    if (g_miCurHP) n += hookOne(g_miCurHP, (void *)my2_setCurrentHP, &g_origCurHP);
+    if (g_miMaxHP) n += hookOne(g_miMaxHP, (void *)my2_setMaxHP,     &g_origMaxHP);
+
+    // 2. isDead / CheckDie
+    g_miIsDead   = XGI2MethodInfo(XG_ENEMY_INSTANCE_CLASS, "get_isDead", 0);
+    g_miCheckDie = XGI2MethodInfo(XG_ENEMY_INSTANCE_CLASS, "CheckDie", 0);
+    NSLog(@"[XG] mi isDead=%p CheckDie=%p", g_miIsDead, g_miCheckDie);
+    if (g_miIsDead)   n += hookOne(g_miIsDead,   (void *)my_get_isDead, &g_origIsDead);
+    if (g_miCheckDie) n += hookOne(g_miCheckDie, (void *)my_CheckDie,   &g_origCheckDie);
+
+    g_deadHookOn = (n > 0);
+    snprintf(g_callMsg, sizeof(g_callMsg), "装了 %d 个 hook（进战斗看计数）", n);
+    NSLog(@"[XG] %s", g_callMsg);
+    return n;
+}
+
+void XGRemoveDeadHook(void) {
+    if (g_miCurHP && g_origCurHP)         SafeWrite((uintptr_t)g_miCurHP, &g_origCurHP, 8);
+    if (g_miMaxHP && g_origMaxHP)         SafeWrite((uintptr_t)g_miMaxHP, &g_origMaxHP, 8);
+    if (g_miIsDead && g_origIsDead)       SafeWrite((uintptr_t)g_miIsDead, &g_origIsDead, 8);
+    if (g_miCheckDie && g_origCheckDie)   SafeWrite((uintptr_t)g_miCheckDie, &g_origCheckDie, 8);
+    g_deadHookOn = 0;
+    snprintf(g_callMsg, sizeof(g_callMsg), "hook 已卸载");
+}
