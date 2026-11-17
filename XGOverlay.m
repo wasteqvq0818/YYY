@@ -98,8 +98,12 @@ static UIWindow *XGHostWindow(void) {
         default: stateLine = @"⭕️ 还没扫过"; color = [UIColor colorWithWhite:0.75 alpha:1.0]; break;
     }
 
-    NSString *text = [NSString stringWithFormat:@"%@\n%@", stateLine,
-                      m ? [NSString stringWithUTF8String:m] : @""];
+    NSString *samples = @"";
+    const char *si = XGSampleInfo();
+    if (si && si[0]) samples = [NSString stringWithFormat:@"\n样本:\n%s", si];
+
+    NSString *text = [NSString stringWithFormat:@"%@\n%@%@", stateLine,
+                      m ? [NSString stringWithUTF8String:m] : @"", samples];
 
     UIFont *font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     CGSize maxSz = CGSizeMake(self.tableView.bounds.size.width - 32, CGFLOAT_MAX);
