@@ -92,7 +92,7 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
     const char *sm;
-    if (XGWaveMsg()[0] != '未') sm = XGWaveMsg();
+    if (strcmp(XGWaveMsg(), "未执行") != 0) sm = XGWaveMsg();
     else if (XGPatchEnemyCount() > 0) sm = XGPatchMsg();
     else if (XGCallRan())      sm = XGCallDieMsg();
     else if (XGKillRan())      sm = XGKillMessage();
