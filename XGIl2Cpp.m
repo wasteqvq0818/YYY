@@ -37,6 +37,8 @@ static Il2CppImage   *(*p_class_get_image)(Il2CppClass *);
 static Il2CppClass   *(*p_image_get_class)(const Il2CppImage *, size_t);
 static size_t         (*p_image_get_class_count)(const Il2CppImage *);
 static const char    *(*p_class_get_name)(Il2CppClass *);
+static void          *(*p_class_get_field_from_name)(Il2CppClass *, const char *);
+static void           (*p_field_static_get_value)(void *, void *);
 static const char    *(*p_class_get_namespace)(Il2CppClass *);
 static const MethodInfo *(*p_class_get_method_from_name)(Il2CppClass *, const char *, int);
 static FieldInfo     *(*p_class_get_fields)(Il2CppClass *, void **);
@@ -71,6 +73,10 @@ bool XGI2Init(void) {
                                 dlsym(h, "il2cpp_image_get_class");
     p_image_get_class_count   = (size_t (*)(const Il2CppImage *))dlsym(h, "il2cpp_image_get_class_count");
     p_class_get_name          = (const char *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_name");
+    p_class_get_field_from_name = (void *(*)(Il2CppClass *, const char *))
+                                  dlsym(h, "il2cpp_class_get_field_from_name");
+    p_field_static_get_value  = (void (*)(void *, void *))
+                                dlsym(h, "il2cpp_field_static_get_value");
     p_class_get_namespace     = (const char *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_namespace");
     p_class_get_method_from_name = (const MethodInfo *(*)(Il2CppClass *, const char *, int))
                                 dlsym(h, "il2cpp_class_get_method_from_name");
@@ -322,6 +328,30 @@ const char *XGI2ClassNamespace(void *klass) {
     if (!klass) return NULL;
     if (!XGI2Init() || !p_class_get_namespace) return NULL;
     return p_class_get_namespace((Il2CppClass *)klass);
+}
+
+// 读静态字段的值（运行时自己处理基址+偏移，不用手算）
+// out: 输出缓冲；size: 字段大小（引用类型传 8）
+bool XGI2StaticFieldValue(const char *className, const char *field, void *out, int size) {
+    if (!out || size <= 0) return false;
+    if (!XGI2Init() || !p_class_get_field_from_name || !p_field_static_get_value) return false;
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return false;
+    void *f = p_class_get_field_from_name(k, field);
+    if (!f) return false;
+    memset(out, 0, (size_t)size);
+    p_field_static_get_value(f, out);      // 运行时按自己的规则取
+    return true;
+}
+
+// 拿字段偏移（诊断用）
+size_t XGI2FieldOffset(const char *className, const char *field) {
+    if (!XGI2Init() || !p_class_get_field_from_name || !p_field_get_offset) return (size_t)-1;
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return (size_t)-1;
+    void *f = p_class_get_field_from_name(k, field);
+    if (!f) return (size_t)-1;
+    return p_field_get_offset(f);
 }
 
 void *XGI2StaticData(const char *className) {
