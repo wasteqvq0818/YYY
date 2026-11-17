@@ -1852,3 +1852,163 @@ int XGHookHPGetter(void) {
     DLog("结果: %s", g_patchMsg);
     return 1;
 }
+
+
+// ============================================================================
+//  v34 · 监视模式
+//
+//  XiuGou 还能正常运行 —— 与其继续猜它怎么做的，不如直接观察。
+//  我们和它可以同时注入（TrollFools 支持多 dylib）。
+//
+//  这里每 0.5 秒快照一次：
+//    · BattleZoneEnemy 列表长度与元素地址
+//    · 每个敌人：_mCurrentHP(Decimal 16B)、predictHP、_isDead、cannotDie、waitingToDie
+//    · RESTORE_CACHE 字符串长度 + 简易哈希
+//  有变化就写进 XG_diag.txt 并带上时间戳。
+//
+//  然后你用 XiuGou 触发「快速胜利」，日志里哪个值变了，就是它改的地方。
+// ============================================================================
+
+static volatile int g_monActive = 0;
+static NSTimer *g_monTimer = nil;
+static char g_monMsg[256] = "未监视";
+
+typedef struct {
+    uintptr_t inst;
+    uint32_t  hp[4];
+    float     pHP;
+    uint8_t   isDead, waiting, cannotDie;
+} MonSnap;
+
+#define MON_MAX 16
+static MonSnap g_lastSnap[MON_MAX];
+static int     g_lastCount = 0;
+static NSUInteger g_lastCacheLen = 0;
+static unsigned long g_lastCacheHash = 0;
+static int     g_monTicks = 0;
+
+int  XGMonitorActive(void) { return g_monActive; }
+const char *XGMonitorMsg(void) { return g_monMsg; }
+
+static unsigned long strHash(NSString *s) {
+    unsigned long h = 5381;
+    const char *p = s.UTF8String;
+    if (!p) return 0;
+    for (size_t i = 0; p[i] && i < 200000; i++) h = ((h << 5) + h) ^ (unsigned char)p[i];
+    return h;
+}
+
+static void XGMonitorTick(void) {
+    @autoreleasepool {
+        if (!g_monActive || !XGI2Init()) return;
+        g_monTicks++;
+
+        // 1. RESTORE_CACHE 变化
+        NSString *cache = [[NSUserDefaults standardUserDefaults] stringForKey:@"RESTORE_CACHE"];
+        NSUInteger clen = cache.length;
+        unsigned long chash = clen ? strHash(cache) : 0;
+        if (g_monTicks > 1 && (clen != g_lastCacheLen || chash != g_lastCacheHash)) {
+            DLog("[监视] ★ RESTORE_CACHE 变化: %lu -> %lu 字节  hash %lx -> %lx",
+                 (unsigned long)g_lastCacheLen, (unsigned long)clen, g_lastCacheHash, chash);
+        }
+        g_lastCacheLen = clen;
+        g_lastCacheHash = chash;
+
+        // 2. 战场敌人
+        uintptr_t list = 0;
+        if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+            if (g_lastCount != 0 && g_monTicks > 1) {
+                DLog("[监视] BattleZoneEnemy 变空（原 %d 个）", g_lastCount);
+                g_lastCount = 0;
+            }
+            return;
+        }
+        uintptr_t items = 0; int32_t count = 0;
+        SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+        SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
+        if (!items || count < 0 || count > MON_MAX) return;
+
+        if (g_monTicks > 1 && count != g_lastCount) {
+            DLog("[监视] ★ 敌人数变化: %d -> %d", g_lastCount, count);
+        }
+
+        void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+        void *kData = XGI2Class(XG_ENEMY_CLASS);
+
+        for (int i = 0; i < count; i++) {
+            uintptr_t inst = 0;
+            if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
+            if (kInst && ReadKlass(inst) != kInst) continue;
+
+            MonSnap cur;
+            memset(&cur, 0, sizeof(cur));
+            cur.inst = inst;
+            SafeRead(inst + XG_ACC_INST_PREDICT_HP, &cur.pHP, 4);
+            SafeRead(inst + XG_ACC_INST_ISDEAD, &cur.isDead, 1);
+            SafeRead(inst + 0x180, &cur.waiting, 1);
+            SafeRead(inst + XG_ACC_INST_CANNOTDIE, &cur.cannotDie, 1);
+
+            uintptr_t mData = 0;
+            if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000 &&
+                (!kData || ReadKlass(mData) == kData)) {
+                SafeRead(mData + XG_ACC_DATA_CUR_HP, cur.hp, 16);
+            }
+
+            // 与上次比较
+            if (g_monTicks > 1) {
+                MonSnap *old = NULL;
+                for (int j = 0; j < g_lastCount; j++) {
+                    if (g_lastSnap[j].inst == inst) { old = &g_lastSnap[j]; break; }
+                }
+                if (!old) {
+                    DLog("[监视] ★ 新敌人 0x%lx hp=[%u,%u,%u,0x%x] pHP=%.0f isDead=%d",
+                         (unsigned long)inst, cur.hp[0], cur.hp[1], cur.hp[2], cur.hp[3],
+                         cur.pHP, cur.isDead);
+                } else {
+                    if (memcmp(old->hp, cur.hp, 16) != 0) {
+                        DLog("[监视] ★ 0x%lx HP 变化: [%u,%u,%u,0x%x] -> [%u,%u,%u,0x%x]",
+                             (unsigned long)inst,
+                             old->hp[0], old->hp[1], old->hp[2], old->hp[3],
+                             cur.hp[0], cur.hp[1], cur.hp[2], cur.hp[3]);
+                    }
+                    if (old->pHP != cur.pHP) {
+                        DLog("[监视] ★ 0x%lx predictHP: %.0f -> %.0f",
+                             (unsigned long)inst, old->pHP, cur.pHP);
+                    }
+                    if (old->isDead != cur.isDead)
+                        DLog("[监视] ★ 0x%lx isDead: %d -> %d", (unsigned long)inst, old->isDead, cur.isDead);
+                    if (old->waiting != cur.waiting)
+                        DLog("[监视] ★ 0x%lx waitingToDie: %d -> %d", (unsigned long)inst, old->waiting, cur.waiting);
+                    if (old->cannotDie != cur.cannotDie)
+                        DLog("[监视] ★ 0x%lx cannotDie: %d -> %d", (unsigned long)inst, old->cannotDie, cur.cannotDie);
+                }
+            }
+            g_lastSnap[i] = cur;
+        }
+        g_lastCount = count;
+    }
+}
+
+void XGMonitorStart(void) {
+    if (g_monActive) return;
+    g_monActive = 1;
+    g_monTicks = 0;
+    g_lastCount = 0;
+    g_lastCacheLen = 0;
+    g_lastCacheHash = 0;
+    memset(g_lastSnap, 0, sizeof(g_lastSnap));
+
+    DLog("\n===== 监视开始 %s =====", [[NSDate date] description].UTF8String);
+    g_monTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+                                                 repeats:YES
+                                                   block:^(NSTimer *t) { XGMonitorTick(); }];
+    snprintf(g_monMsg, sizeof(g_monMsg), "监视中（0.5s 一次）→ 去开 XiuGou 的功能对比");
+    NSLog(@"[XG] %s", g_monMsg);
+}
+
+void XGMonitorStop(void) {
+    g_monActive = 0;
+    if (g_monTimer) { [g_monTimer invalidate]; g_monTimer = nil; }
+    snprintf(g_monMsg, sizeof(g_monMsg), "监视已停止");
+    DLog("===== 监视结束 =====");
+}
