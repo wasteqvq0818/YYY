@@ -9,6 +9,8 @@ void XGLoadConfig(void) {
     XG.conf.solveBudgetMs = 30;
     XG.conf.minCombos     = 3;
     XG.conf.scanIntervalMs = 1500;
+    XG.conf.stageCurrent   = 1;      // 默认：第 1 关
+    XG.conf.stageTotal     = 7;      // 默认：共 7 关
     XG.conf.dryRun        = NO;
 
     for (int i = 0; i < F_COUNT; i++) XG.on[i] = NO;
@@ -22,6 +24,8 @@ void XGLoadConfig(void) {
     }
     XG.conf.scanIntervalMs = [d[@"scanIntervalMs"] intValue] ?: XG.conf.scanIntervalMs;
     XG.conf.dryRun         = [d[@"dryRun"] boolValue];
+    XG.conf.stageCurrent   = [d[@"stageCurrent"] intValue] ?: XG.conf.stageCurrent;
+    XG.conf.stageTotal     = [d[@"stageTotal"] intValue]   ?: XG.conf.stageTotal;
 
     NSArray *flags = d[@"flags"];
     if (flags.count == F_COUNT) {
@@ -36,6 +40,8 @@ void XGSaveConfig(void) {
 
     NSDictionary *d = @{
         @"scanIntervalMs": @(XG.conf.scanIntervalMs),
+        @"stageCurrent":   @(XG.conf.stageCurrent),
+        @"stageTotal":     @(XG.conf.stageTotal),
         @"dryRun":         @(XG.conf.dryRun),
         @"flags":          flags,
     };
