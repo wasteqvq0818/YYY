@@ -154,9 +154,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = XGKillAllRunning() ? [NSString stringWithFormat:@"💀 连续杀：进行中（已 %d）", XGKillAllCount()] : @"💀 连续杀光敌人（走死亡流程）";
+        c.textLabel.text = @"🏆 直接胜利（Labyrinth.Victory）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"每 0.25 秒调一次 EnemyDie，逐个杀到列表空";
+        c.detailTextLabel.text = @"调游戏自己的结算入口，不用打一波一波";
     } else if (ip.row == 1) {
         c.textLabel.text = @"🧹 手动清空当前敌人";
         c.detailTextLabel.text = XGClearMsg() && XGClearMsg()[0] ? [NSString stringWithUTF8String:XGClearMsg()] : @"清空 BattleZoneEnemy（只点一次）";
@@ -202,12 +202,11 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        if (XGKillAllRunning()) XGKillAllStop();
-        else XGKillAllStart();
+        XGForceVictoryNow();
         [self refreshHeader];
-        for (int i = 1; i <= 6; i++) {
+        for (int i = 1; i <= 4; i++) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+                           dispatch_get_main_queue(), ^{ [self refreshHeader]; });
         }
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
