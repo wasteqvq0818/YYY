@@ -154,9 +154,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"💀 走游戏死亡流程（敌人消失+结算）";
+        c.textLabel.text = XGKillAllRunning() ? [NSString stringWithFormat:@"💀 连续杀：进行中（已 %d）", XGKillAllCount()] : @"💀 连续杀光敌人（走死亡流程）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"直接调 EnemyDie() 的 methodPointer，和 XG 的效果一致";
+        c.detailTextLabel.text = @"每 0.25 秒调一次 EnemyDie，逐个杀到列表空";
     } else if (ip.row == 1) {
         c.textLabel.text = @"🧹 手动清空当前敌人";
         c.detailTextLabel.text = XGClearMsg() && XGClearMsg()[0] ? [NSString stringWithUTF8String:XGClearMsg()] : @"清空 BattleZoneEnemy（只点一次）";
@@ -202,12 +202,13 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGDieCallAsync();
+        if (XGKillAllRunning()) XGKillAllStop();
+        else XGKillAllStart();
         [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+        for (int i = 1; i <= 6; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+        }
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
