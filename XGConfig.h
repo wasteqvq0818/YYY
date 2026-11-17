@@ -26,6 +26,8 @@ extern "C" {
 #define XG_ENEMY_INSTANCE_CLASS  "EnemyInstance"
 #define XG_OFF_EI_PREVENT_KILL   0x48     // _isPreventInstantKill
 #define XG_OFF_EI_CANNOT_DIE     0x8a     // cannotDie
+#define XG_OFF_EI_DEAD           0x90     // _isDead
+#define XG_OFF_EI_PREDICT_HP     0x38     // predictHP（血条显示值）
 
 // ---- 功能开关（只剩一个）----
 typedef enum {
@@ -59,6 +61,7 @@ void XGScanAsync(void);
 int  XGScanState(void);
 const char *XGScanMessage(void);
 int  XGLastKillCount(void);
+const char *XGSampleInfo(void);   // 命中样本（地址 + hp），面板显示用
 
 #ifdef __cplusplus
 }
