@@ -57,10 +57,10 @@ static uintptr_t FWImageBase(void) {
 
 static BOOL FWRead(uintptr_t addr, void *out, size_t len) {
     if (!addr || !out) return NO;
-    mach_vm_size_t got = 0;
-    return mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr,
-                                  (mach_vm_size_t)len,
-                                  (mach_vm_address_t)out, &got) == KERN_SUCCESS;
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)addr,
+                                  (vm_size_t)len,
+                                  (vm_address_t)out, &got) == KERN_SUCCESS;
 }
 
 static uintptr_t FWPtr(uintptr_t addr) {
@@ -80,7 +80,7 @@ static BOOL FWWrite(uintptr_t addr, const void *data, size_t len) {
     uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1);
     vm_protect(mach_task_self(), (vm_address_t)page, PAGE_SIZE,
                FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-    return mach_vm_write(mach_task_self(), (vm_address_t)addr,
+    return vm_write(mach_task_self(), (vm_address_t)addr,
                          (vm_offset_t)data, (mach_msg_type_number_t)len) == KERN_SUCCESS;
 }
 
