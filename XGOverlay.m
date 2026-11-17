@@ -87,14 +87,14 @@ static UIWindow *XGHostWindow(void) {
 }
 
 - (void)refreshHeader {
-    BOOL hooked = XGDeadHookInstalled() != 0;
-    NSString *stateLine = hooked ? @"✅ Hook 已装（进战斗生效）" : @"⭕️ Hook 未装";
+    BOOL hooked = XGInlineCount() > 0;
+    NSString *stateLine = hooked ? [NSString stringWithFormat:@"✅ inline hook 已装（%d 个）", XGInlineCount()] : @"⭕️ 未装 inline hook";
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
 
     const char *sm = XGScanMessage();
     NSString *text = [NSString stringWithFormat:@"%@\n计数：HP %d｜isDead %d｜CheckDie %d｜验证 %d\n%@",
-        stateLine, XGCntCurHP(), XGCntIsDead(), XGCntCheckDie(), XGCntVerify(),
+        stateLine, XGCntCurHP2(), XGCntIsDead2(), XGCntCheckDie2(), XGCntVerify2(),
         (sm && sm[0]) ? [NSString stringWithUTF8String:sm] : @""];
 
     UIFont *font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
@@ -171,12 +171,12 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
-        if (XGDeadHookInstalled()) {
-            XGRemoveDeadHook();
-        } else {
-            XGResetCounters();
-            XGInstallDeadHook();
+        if (XGInlineCount() > 0) {
+            [self refreshHeader];
+            [tv reloadData];
+            return;
         }
+        XGInstallInlineHooks();
         [self refreshHeader];
         [tv reloadData];
     } else if (ip.row == 2) {
