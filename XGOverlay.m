@@ -154,12 +154,12 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"🏆 直接胜利（Labyrinth.Victory）";
+        c.textLabel.text = XGAutoKillActive() ? [NSString stringWithFormat:@"🚀 自动过关：开（已处理 %d）", XGAutoKillTotal()] : @"🚀 自动过关：关（点此开启）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"调游戏自己的结算入口，不用打一波一波";
+        c.detailTextLabel.text = XGAutoKillActive() ? @"进战斗自动处理敌人，走完整流程（正常掉卡）" : @"开启后进战斗自动秒过，掉落正常";
     } else if (ip.row == 1) {
-        c.textLabel.text = @"🧹 手动清空当前敌人";
-        c.detailTextLabel.text = XGClearMsg() && XGClearMsg()[0] ? [NSString stringWithUTF8String:XGClearMsg()] : @"清空 BattleZoneEnemy（只点一次）";
+        c.textLabel.text = @"⚡ 极速胜利（快，但可能不掉卡）";
+        c.detailTextLabel.text = @"调 Labyrinth.Victory()，立刻结算但跳过掉落流程";
     } else if (ip.row == 2) {
         BOOL on = XGInlineCount() > 0;
         c.textLabel.text = on ? @"🔨 inline hook 已装" : @"🔨 装 inline hook（备用）";
@@ -202,22 +202,20 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGForceVictoryNow();
+        if (XGAutoKillActive()) XGAutoKillStop();
+        else XGAutoKillStart();
         [self refreshHeader];
-        for (int i = 1; i <= 4; i++) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ [self refreshHeader]; });
-        }
+        [tv reloadData];
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(16 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
-        XGClearBattleZone();
+        XGForceVictoryNow();
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
     } else if (ip.row == 2) {
         if (XGInlineCount() == 0) XGInstallInlineHooks();
         [self refreshHeader]; [tv reloadData];
