@@ -1101,7 +1101,7 @@ void XGZeroBattleZoneAsync(void) {
             }
 
             // 静态数据基址（诊断用）
-            uintptr_t sdata = XGI2StaticData(XG_LAB_CLASS);
+            uintptr_t sdata = (uintptr_t)XGI2StaticData(XG_LAB_CLASS);
 
             // 关两个阻止开关
             uintptr_t blkDieSlot = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
