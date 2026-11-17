@@ -311,6 +311,19 @@ void *XGI2Method(const char *className, const char *method, int argc) {
     return *(void **)m;     // MethodInfo 首字段 = methodPointer
 }
 
+// 取对象的类名（诊断：确认指针指向的到底是什么类型）
+const char *XGI2ClassName(void *klass) {
+    if (!klass) return NULL;
+    if (!XGI2Init() || !p_class_get_name) return NULL;
+    return p_class_get_name((Il2CppClass *)klass);
+}
+
+const char *XGI2ClassNamespace(void *klass) {
+    if (!klass) return NULL;
+    if (!XGI2Init() || !p_class_get_namespace) return NULL;
+    return p_class_get_namespace((Il2CppClass *)klass);
+}
+
 void *XGI2StaticData(const char *className) {
     // 静态字段在 il2cpp 里从 class 的 static field data 起步；这里保留接口，
     // 实际取偏移用 XGI2FieldOff（对静态字段返回的也是相对偏移）
