@@ -92,7 +92,8 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
     const char *sm;
-    if (strcmp(XGWaveMsg(), "未执行") != 0) sm = XGWaveMsg();
+    if (strcmp(XGDirectWinMsg(), "未执行") != 0) sm = XGDirectWinMsg();
+    else if (strcmp(XGWaveMsg(), "未执行") != 0) sm = XGWaveMsg();
     else if (XGPatchEnemyCount() > 0) sm = XGPatchMsg();
     else if (XGCallRan())      sm = XGCallDieMsg();
     else if (XGKillRan())      sm = XGKillMessage();
@@ -159,8 +160,8 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
         c.detailTextLabel.text = XGAutoKillActive() ? @"进战斗自动处理敌人，走完整流程（正常掉卡）" : @"开启后进战斗自动秒过，掉落正常";
     } else if (ip.row == 1) {
-        c.textLabel.text = @"⚡ 极速胜利（快，但可能不掉卡）";
-        c.detailTextLabel.text = @"调 Labyrinth.Victory()，立刻结算但跳过掉落流程";
+        c.textLabel.text = @"🏆 直接胜利（清场+Victory，应掉卡）";
+        c.detailTextLabel.text = @"按 XG 顺序：先清空列表 → 再调 Victory/Victory2";
     } else if (ip.row == 2) {
         BOOL on = XGInlineCount() > 0;
         c.textLabel.text = @"📊 读取波次字段（诊断）";
@@ -213,7 +214,7 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(16 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
-        XGForceVictoryNow();
+        XGDirectWinOrdered();
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
