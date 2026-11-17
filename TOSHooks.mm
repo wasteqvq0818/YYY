@@ -2697,3 +2697,97 @@ void XGJumpToLastWave(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v42 · 按 XG 的真实触发顺序做直接胜利
+//
+//  已知事实：
+//    · XG 的直接胜利会掉卡
+//    · XG 生效时 BattleZoneEnemy 从 1 变 0（监视日志抓到）
+//    · 我们单独调 Victory() 能出胜利画面但不掉卡
+//
+//  两者差别就在「调用时列表里还有没有敌人」：
+//    有敌人 → 游戏认为战斗未结束，Victory 只播动画
+//    没敌人 → 游戏认为全灭，走完整结算并发奖
+//
+//  所以顺序必须是：清空列表 → 再调 Victory()，必要时补 Victory2()。
+// ============================================================================
+
+static char g_directWinMsg[320] = "未执行";
+const char *XGDirectWinMsg(void) { return g_directWinMsg; }
+
+void XGDirectWinOrdered(void) {
+    snprintf(g_directWinMsg, sizeof(g_directWinMsg), "执行中…");
+    DLog("\n===== 顺序直接胜利 %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_directWinMsg, sizeof(g_directWinMsg), "il2cpp 未就绪"); return; }
+
+            uintptr_t lab = 0;
+            if (!XGI2StaticFieldValue(XG_ENEMY_INSTANCE_CLASS, "mLab", &lab, 8) || lab < 0x10000) {
+                snprintf(g_directWinMsg, sizeof(g_directWinMsg), "拿不到 Labyrinth 实例");
+                DLog("%s", g_directWinMsg);
+                return;
+            }
+
+            // ① 先清空敌人列表（制造「全灭」状态，和 XG 一样）
+            int32_t before = -1;
+            uintptr_t list = 0;
+            BOOL cleared = NO;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) && list > 0x10000) {
+                SafeRead(list + XG_ACC_LIST_SIZE, &before, 4);
+                int32_t zero = 0;
+                if (SafeWrite(list + XG_ACC_LIST_SIZE, &zero, 4)) cleared = YES;
+                uintptr_t fp = XGI2StaticFieldPtr(XG_LAB_CLASS, "totalBattleZoneEnemy");
+                if (fp) SafeWrite(fp, &zero, 4);
+                DLog("① 清空列表: %d -> 0 (%s)", before, cleared ? "成功" : "失败");
+            }
+
+            // ② 关掉会拦结算的开关
+            uintptr_t mb1 = 0, mb2 = 0, mb3 = 0;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEnemyDie", &mb1, 8) && mb1 > 0x10000) DisarmManagedBool(mb1);
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEndWholeRound", &mb2, 8) && mb2 > 0x10000) DisarmManagedBool(mb2);
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "IsBlockEndGame", &mb3, 8) && mb3 > 0x10000) DisarmManagedBool(mb3);
+            DLog("② 已关 IsBlockEnemyDie / IsBlockEndWholeRound / IsBlockEndGame");
+
+            // ③ 调 Victory()
+            void *mpV1 = XGI2Method(XG_LAB_CLASS, "Victory", 0);
+            void *mpV2 = XGI2Method(XG_LAB_CLASS, "Victory2", 0);
+            DLog("③ Victory=%p Victory2=%p", mpV1, mpV2);
+
+            int called = 0;
+            if (mpV1) {
+                DLog("   调用 Victory() @ %p", mpV1);
+                ((void (*)(void *))mpV1)((void *)lab);
+                called++;
+            }
+            snprintf(g_directWinMsg, sizeof(g_directWinMsg),
+                     "已清 %d 个敌人 + 调用 Victory%s",
+                     before > 0 ? before : 0, called ? "()" : "（方法没拿到）");
+
+            // ④ 1.2 秒后如果还在战斗，补调 Victory2()
+            if (mpV2) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    @autoreleasepool {
+                        uintptr_t l2 = 0, list2 = 0;
+                        int32_t cnt = -1;
+                        if (XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list2, 8) && list2 > 0x10000)
+                            SafeRead(list2 + XG_ACC_LIST_SIZE, &cnt, 4);
+                        if (XGI2StaticFieldValue(XG_ENEMY_INSTANCE_CLASS, "mLab", &l2, 8) && l2 > 0x10000) {
+                            DLog("④ 补调 Victory2()（当前敌人 %d）", cnt);
+                            ((void (*)(void *))mpV2)((void *)l2);
+                            snprintf(g_directWinMsg, sizeof(g_directWinMsg),
+                                     "已调 Victory + Victory2（清 %d 个敌人）", before > 0 ? before : 0);
+                        }
+                    }
+                });
+            }
+
+            DLog("结果: %s", g_directWinMsg);
+            NSLog(@"[XG] %s", g_directWinMsg);
+        }
+    });
+}
