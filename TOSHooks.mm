@@ -1058,14 +1058,14 @@ void XGZeroEnemiesAsync(void) {
 //  敌人就算血量归零也不会死，很可能就是之前「清了血但敌人不死」的原因。
 // ============================================================================
 
-static volatile int g_zbHits = 0, g_zbChanged = 0;
-static char g_zbMsg[256] = "未执行";
+static volatile int g_zbHits = 0, g_zbChanged = 0, g_zbRan = 0;
+static char g_zbMsg[384] = "未执行";
 
 int  XGZBHits(void)    { return g_zbHits; }
 int  XGZBChanged(void) { return g_zbChanged; }
+int  XGZBRan(void)     { return g_zbRan; }
 const char *XGZBMessage(void) { return g_zbMsg; }
 
-// 把 ManagedBool 断开：_keys 的 size 归零 + _oriValue 置 false
 static void DisarmManagedBool(uintptr_t mb) {
     if (!mb || mb < 0x10000) return;
     uint8_t f = 0;
@@ -1074,56 +1074,72 @@ static void DisarmManagedBool(uintptr_t mb) {
     uintptr_t keysList = 0;
     if (SafeRead(mb + XG_ACC_MB_KEYS, &keysList, 8) && keysList > 0x10000) {
         int32_t zero = 0;
-        SafeWrite(keysList + XG_ACC_LIST_SIZE, &zero, 4);   // Count = 0 → isTrue 为 false
+        SafeWrite(keysList + XG_ACC_LIST_SIZE, &zero, 4);
     }
 }
 
 void XGZeroBattleZoneAsync(void) {
-    if (g_state == 1) return;
+    if (g_state == 1) { snprintf(g_zbMsg, sizeof(g_zbMsg), "上一次还没跑完"); g_zbRan = 1; return; }
     g_state = 1;
-    snprintf(g_zbMsg, sizeof(g_zbMsg), "读战场敌人…");
+    g_zbRan = 1;
+    g_zbHits = 0;
+    g_zbChanged = 0;
+    snprintf(g_zbMsg, sizeof(g_zbMsg), "读取中…");
 
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
-            if (!XGI2Init()) { snprintf(g_zbMsg, sizeof(g_zbMsg), "il2cpp 未就绪"); g_state = 3; return; }
+            if (!XGI2Init()) {
+                snprintf(g_zbMsg, sizeof(g_zbMsg), "①il2cpp 未就绪");
+                g_state = 3; return;
+            }
 
             Il2CppClass *lab = XGI2Class(XG_LAB_CLASS);
             void *kData = XGI2Class(XG_ENEMY_CLASS);
-            if (!lab) { snprintf(g_zbMsg, sizeof(g_zbMsg), "找不到 Labyrinth 类"); g_state = 3; return; }
+            if (!lab) {
+                snprintf(g_zbMsg, sizeof(g_zbMsg), "②找不到 Labyrinth 类");
+                g_state = 3; return;
+            }
 
-            // 1. 关掉两个「阻止」开关（可能正是敌人不死的原因）
-            uintptr_t blkDie = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
-            uintptr_t blkBar = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockChangeHPBar");
-            if (blkDie) { uintptr_t mb = 0; if (SafeRead(blkDie, &mb, 8)) DisarmManagedBool(mb); }
-            if (blkBar) { uintptr_t mb = 0; if (SafeRead(blkBar, &mb, 8)) DisarmManagedBool(mb); }
-            NSLog(@"[XG] 已关 IsBlockEnemyDie/IsBlockChangeHPBar");
+            // 静态数据基址（诊断用）
+            uintptr_t sdata = 0;
+            if (p_class_get_static_field_data) sdata = (uintptr_t)p_class_get_static_field_data(lab);
 
-            // 2. 读 BattleZoneEnemy 列表
+            // 关两个阻止开关
+            uintptr_t blkDieSlot = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockEnemyDie");
+            uintptr_t blkBarSlot = XGI2StaticFieldPtr(XG_LAB_CLASS, "IsBlockChangeHPBar");
+            int disarmed = 0;
+            if (blkDieSlot) { uintptr_t mb = 0; if (SafeRead(blkDieSlot, &mb, 8) && mb > 0x10000) { DisarmManagedBool(mb); disarmed++; } }
+            if (blkBarSlot) { uintptr_t mb = 0; if (SafeRead(blkBarSlot, &mb, 8) && mb > 0x10000) { DisarmManagedBool(mb); disarmed++; } }
+
+            // 战场敌人列表
             uintptr_t slot = XGI2StaticFieldPtr(XG_LAB_CLASS, "BattleZoneEnemy");
-            if (!slot) { snprintf(g_zbMsg, sizeof(g_zbMsg), "拿不到 BattleZoneEnemy 字段"); g_state = 3; return; }
+            if (!slot) {
+                snprintf(g_zbMsg, sizeof(g_zbMsg),
+                         "③拿不到 BattleZoneEnemy 字段（sdata=0x%lx）", (unsigned long)sdata);
+                g_state = 3; return;
+            }
 
             uintptr_t list = 0;
             if (!SafeRead(slot, &list, 8) || list < 0x10000) {
-                snprintf(g_zbMsg, sizeof(g_zbMsg), "BattleZoneEnemy 为空（不在战斗中）");
-                g_state = 3;
-                return;
+                snprintf(g_zbMsg, sizeof(g_zbMsg),
+                         "④列表为空 slot=0x%lx list=0x%lx（确认在战斗里）",
+                         (unsigned long)slot, (unsigned long)list);
+                g_state = 3; return;
             }
 
             uintptr_t items = 0;
             int32_t   count = 0;
             SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
             SafeRead(list + XG_ACC_LIST_SIZE,  &count, 4);
-            NSLog(@"[XG] BattleZoneEnemy list=%p items=%p count=%d",
-                  (void *)list, (void *)items, count);
 
             if (!items || count <= 0 || count > 64) {
-                snprintf(g_zbMsg, sizeof(g_zbMsg), "列表异常 list=%p count=%d", (void *)list, count);
-                g_state = 3;
-                return;
+                snprintf(g_zbMsg, sizeof(g_zbMsg),
+                         "⑤列表异常 list=0x%lx items=0x%lx count=%d",
+                         (unsigned long)list, (unsigned long)items, count);
+                g_state = 3; return;
             }
 
-            // 3. 逐个 EnemyInstance：走 mData 清 Decimal 血量
-            int hits = 0, changed = 0;
+            int hits = 0, changed = 0, klassFail = 0, mdataFail = 0;
             uint8_t zero16[XG_ACC_DECIMAL_SIZE];
             memset(zero16, 0, sizeof(zero16));
 
@@ -1132,19 +1148,15 @@ void XGZeroBattleZoneAsync(void) {
                 if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &inst, 8) || inst < 0x10000) continue;
                 hits++;
 
-                // mData
                 uintptr_t mData = 0;
-                if (!SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) || mData < 0x10000) continue;
-                if (kData && ReadKlass(mData) != kData) continue;
+                if (!SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) || mData < 0x10000) { mdataFail++; continue; }
+                if (kData && ReadKlass(mData) != kData) { klassFail++; continue; }
 
-                // 清血量（Decimal 16 字节 → 0）
                 if (SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16))) changed++;
 
-                // 血条显示值（float）
                 float zf = 0.0f;
                 SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
 
-                // 防秒杀开关 + 标死
                 uint8_t b0 = 0, b1 = 1;
                 SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
                 SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
@@ -1155,8 +1167,10 @@ void XGZeroBattleZoneAsync(void) {
             g_zbChanged = changed;
             g_state = 2;
             snprintf(g_zbMsg, sizeof(g_zbMsg),
-                     "战场敌人 %d 个｜清血 %d 个｜已关阻止开关", hits, changed);
-            NSLog(@"[XG] %s", g_zbMsg);
+                     "敌人%d｜清血%d｜关开关%d｜mData失败%d｜klass失败%d",
+                     hits, changed, disarmed, mdataFail, klassFail);
+            NSLog(@"[XG] %s  (list=%p items=%p count=%d sdata=0x%lx)",
+                  g_zbMsg, (void *)list, (void *)items, count, (unsigned long)sdata);
         }
     });
 }
