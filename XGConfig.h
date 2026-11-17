@@ -75,6 +75,9 @@ extern "C" {
 #define XG_FASTWIN_WIN_METHOD   XG_SETTLE_METHOD
 #define XG_FASTWIN_WIN_ARGC     XG_SETTLE_ARGC
 #define XG_FASTWIN_CLASS        XG_SETTLE_CLASS
+#define XG_FASTWIN_USE_INSTANCE 0
+#define XG_OFF_ENEMY_HP         XG_OFF_ENEMY_HP_SIMPLE
+#define XG_OFF_ENEMY_ALIVE      XG_OFF_ENEMY_DEAD
 
 // ---- 快速胜利 ----
 #define XG_BATTLE_ROOT_PTR_OFF   0x00000000  // 已废弃：现在通过类单例取，不再硬编码映像偏移
