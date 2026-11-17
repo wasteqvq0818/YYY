@@ -42,6 +42,16 @@ uint32_t XGI2FieldOff(const char *className, const char *field);
 // 给定 Il2CppClass* 直接取字段偏移（避免再走一次全量遍历）
 uint32_t XGI2FieldOffOfClass(void *klass, const char *field);
 
+// 读静态字段的值（当指针用）。会先触发类型初始化（cctor），否则 static data 为空
+uintptr_t XGI2StaticFieldPtr(const char *className, const char *field);
+
+// 多路尝试拿单例：静态字段(Instance/_instance/_getInstance/mInstance) + 静态方法(getInstance/get_Instance/Instance/get_Current/Current)
+// 探测阶段用来确定 Puzzle 这类核心类到底怎么取实例
+void *XGI2GetInstanceMulti(const char *className);
+
+// 打印某类的静态字段（调试用，写进 probe 文件）
+void XGI2DumpStaticFields(const char *className);
+
 // 静态字段数据区指针（静态字段用它 + offset）
 void *XGI2StaticData(const char *className);
 
