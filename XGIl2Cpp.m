@@ -6,290 +6,106 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <time.h>
+#include <unistd.h>
+#include <mach-o/dyld.h>
 
 // ============================================================================
-//  IL2CPP 导出符号（全部 dlsym 拿，不硬链 —— 硬链在符号缺失时会让 dylib 整个加载失败）
+//  IL2CPP 导航层
+//
+//  ⚠️ 签名必须与 IL2CPP 官方头一致，否则 C 调用约定下会读到垃圾指针直接 SIGSEGV。
+//     本文件曾经踩过两个坑（已修）：
+//       1. il2cpp_field_get_offset(FieldInfo*)           —— 只吃一个参数，
+//          原来写成 (klass, name)，等于把 klass 当 FieldInfo 解引用。
+//       2. il2cpp_class_from_name(Il2CppImage*, ns, name) —— 第一个参数是 Image 不是 Domain。
+//          本文件干脆不用它：遍历全部 image 的类按名字比对，跨版本更稳。
+//
+//  另外：il2cpp 的 image/class 遍历相关导出在不同版本里名字略有差异，
+//  所有可选符号都做非空检查，缺失就降级而不是崩。
 // ============================================================================
-typedef struct Il2CppDomain Il2CppDomain;
+
+typedef struct Il2CppDomain  Il2CppDomain;
 typedef struct Il2CppAssembly Il2CppAssembly;
-typedef struct Il2CppImage Il2CppImage;
+typedef struct Il2CppImage   Il2CppImage;
+typedef struct Il2CppClass   Il2CppClass;
+typedef struct FieldInfo     FieldInfo;
+typedef struct MethodInfo    MethodInfo;
 
-static Il2CppDomain *(*p_domain_get)(void);
+static Il2CppDomain  *(*p_domain_get)(void);
 static const Il2CppAssembly **(*p_domain_get_assemblies)(const Il2CppDomain *, size_t *);
-static Il2CppImage *(*p_assembly_get_image)(const Il2CppAssembly *);
-static Il2CppClass *(*p_image_get_class)(const Il2CppImage *, size_t);
-static size_t (*p_image_get_class_count)(const Il2CppImage *);
-static const char *(*p_class_get_name)(Il2CppClass *);
-static const char *(*p_class_get_namespace)(Il2CppClass *);
+static Il2CppImage   *(*p_assembly_get_image)(const Il2CppAssembly *);
+static Il2CppImage   *(*p_class_get_image)(Il2CppClass *);
+static Il2CppClass   *(*p_image_get_class)(const Il2CppImage *, size_t);
+static size_t         (*p_image_get_class_count)(const Il2CppImage *);
+static const char    *(*p_class_get_name)(Il2CppClass *);
+static const char    *(*p_class_get_namespace)(Il2CppClass *);
 static const MethodInfo *(*p_class_get_method_from_name)(Il2CppClass *, const char *, int);
-static const void *(*p_field_get_offset)(Il2CppClass *, const char *);
-static void *(*p_class_get_static_field_data)(Il2CppClass *);
-static void *(*p_runtime_invoke)(const void *, void *, void **, void **);
-static void *(*p_class_get_fields)(Il2CppClass *, void **);
-static const char *(*p_field_get_name)(void *);
-static void *(*p_class_get_methods)(Il2CppClass *, void **);
-static const char *(*p_method_get_name)(void *);
-static uint32_t (*p_method_get_param_count)(void *);
+static FieldInfo     *(*p_class_get_fields)(Il2CppClass *, void **);
+static const char    *(*p_field_get_name)(FieldInfo *);
+static size_t         (*p_field_get_offset)(FieldInfo *);      // ★ 单参数
+static uint32_t       (*p_method_get_param_count)(const MethodInfo *);
+static void          *(*p_runtime_invoke)(const void *, void *, void **, void **);
 
-static bool g_i2ready = false;
-static char g_err[256] = {0};
-
-// ---- 类名缓存：类名 → Il2CppClass* ----
-#define CACHE_MAX 128
-typedef struct { char name[64]; Il2CppClass *cls; } CacheEnt;
-static CacheEnt g_cache[CACHE_MAX];
-static int g_cacheN = 0;
+static bool g_ready = false;
+static char g_err[256];
 
 const char *XGI2LastError(void) { return g_err; }
 
-static void set_err(const char *fmt, const char *a, const char *b) {
-    snprintf(g_err, sizeof(g_err), fmt, a ? a : "", b ? b : "");
-}
-
 bool XGI2Init(void) {
-    if (g_i2ready) return true;
+    if (g_ready) return true;
     void *h = dlopen(NULL, RTLD_NOW);
     if (!h) h = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW);
 
-    p_domain_get                = (Il2CppDomain *(*)(void))dlsym(h, "il2cpp_domain_get");
-    p_domain_get_assemblies     = (const Il2CppAssembly **(*)(const Il2CppDomain *, size_t *))dlsym(h, "il2cpp_domain_get_assemblies");
-    p_assembly_get_image        = (Il2CppImage *(*)(const Il2CppAssembly *))dlsym(h, "il2cpp_assembly_get_image");
-    p_image_get_class           = (Il2CppClass *(*)(const Il2CppImage *, size_t))dlsym(h, "il2cpp_image_get_class");
-    p_image_get_class_count     = (size_t (*)(const Il2CppImage *))dlsym(h, "il2cpp_image_get_class_count");
-    p_class_get_name            = (const char *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_name");
-    p_class_get_namespace       = (const char *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_namespace");
-    p_class_get_method_from_name= (const MethodInfo *(*)(Il2CppClass *, const char *, int))dlsym(h, "il2cpp_class_get_method_from_name");
-    p_field_get_offset          = (const void *(*)(Il2CppClass *, const char *))dlsym(h, "il2cpp_field_get_offset");
-    p_class_get_static_field_data = (void *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_static_field_data");
-    p_runtime_invoke            = (void *(*)(const void *, void *, void **, void **))dlsym(h, "il2cpp_runtime_invoke");
-    p_class_get_fields          = (void *(*)(Il2CppClass *, void **))dlsym(h, "il2cpp_class_get_fields");
-    p_field_get_name            = (const char *(*)(void *))dlsym(h, "il2cpp_field_get_name");
-    p_class_get_methods         = (void *(*)(Il2CppClass *, void **))dlsym(h, "il2cpp_class_get_methods");
-    p_method_get_name           = (const char *(*)(void *))dlsym(h, "il2cpp_method_get_name");
-    p_method_get_param_count    = (uint32_t (*)(void *))dlsym(h, "il2cpp_method_get_param_count");
+    p_domain_get              = (Il2CppDomain *(*)(void))dlsym(h, "il2cpp_domain_get");
+    p_domain_get_assemblies   = (const Il2CppAssembly **(*)(const Il2CppDomain *, size_t *))
+                                dlsym(h, "il2cpp_domain_get_assemblies");
+    p_assembly_get_image      = (Il2CppImage *(*)(const Il2CppAssembly *))
+                                dlsym(h, "il2cpp_assembly_get_image");
+    p_class_get_image         = (Il2CppImage *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_image");
+    p_image_get_class         = (Il2CppClass *(*)(const Il2CppImage *, size_t))
+                                dlsym(h, "il2cpp_image_get_class");
+    p_image_get_class_count   = (size_t (*)(const Il2CppImage *))dlsym(h, "il2cpp_image_get_class_count");
+    p_class_get_name          = (const char *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_name");
+    p_class_get_namespace     = (const char *(*)(Il2CppClass *))dlsym(h, "il2cpp_class_get_namespace");
+    p_class_get_method_from_name = (const MethodInfo *(*)(Il2CppClass *, const char *, int))
+                                dlsym(h, "il2cpp_class_get_method_from_name");
+    p_class_get_fields        = (FieldInfo *(*)(Il2CppClass *, void **))dlsym(h, "il2cpp_class_get_fields");
+    p_field_get_name          = (const char *(*)(FieldInfo *))dlsym(h, "il2cpp_field_get_name");
+    p_field_get_offset        = (size_t (*)(FieldInfo *))dlsym(h, "il2cpp_field_get_offset");
+    p_method_get_param_count  = (uint32_t (*)(const MethodInfo *))dlsym(h, "il2cpp_method_get_param_count");
+    p_runtime_invoke          = (void *(*)(const void *, void *, void **, void **))
+                                dlsym(h, "il2cpp_runtime_invoke");
 
     if (!p_domain_get || !p_class_get_name) {
-        set_err("il2cpp symbols missing (not an IL2CPP process?)", NULL, NULL);
+        snprintf(g_err, sizeof(g_err), "il2cpp 符号缺失（不是 IL2CPP 进程？）");
         return false;
     }
-    g_i2ready = true;
-    NSLog(@"[XG-I2] ready: images api=%d method api=%d",
-          p_image_get_class != NULL, p_class_get_method_from_name != NULL);
+    g_ready = true;
+    NSLog(@"[XG-I2] ready: enum=%d fields=%d methods=%d invoke=%d",
+          p_domain_get_assemblies && p_image_get_class,
+          p_class_get_fields && p_field_get_offset,
+          p_class_get_method_from_name != NULL,
+          p_runtime_invoke != NULL);
     return true;
 }
 
 // ============================================================================
-//  遍历所有 image 的所有类，找名字匹配的。
-//  只做一次遍历（~2 万类，实测几十毫秒），命中即缓存。
+//  遍历：按类名找（不用 il2cpp_class_from_name，避免 namespace 和签名问题）
 // ============================================================================
-Il2CppClass *XGI2Class(const char *name) {
-    if (!name || !*name) return NULL;
+typedef void (*ClassVisitor)(Il2CppClass *k, const char *name, const char *ns, void *ctx);
 
-    for (int i = 0; i < g_cacheN; i++) {
-        if (strcmp(g_cache[i].name, name) == 0 && g_cache[i].cls) return g_cache[i].cls;
-    }
-
-    if (!XGI2Init()) return NULL;
+static int walkClasses(ClassVisitor cb, void *ctx) {
+    if (!XGI2Init()) return 0;
     if (!p_domain_get_assemblies || !p_assembly_get_image || !p_image_get_class) {
-        set_err("image enumeration api unavailable", NULL, NULL);
-        return NULL;
+        snprintf(g_err, sizeof(g_err), "image 枚举 API 缺失");
+        return 0;
     }
-
-    size_t count = 0;
-    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &count);
-    Il2CppClass *found = NULL;
-
-    for (size_t a = 0; a < count && !found; a++) {
-        Il2CppImage *img = p_assembly_get_image(asms[a]);
-        if (!img) continue;
-        size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
-        for (size_t c = 0; c < cc; c++) {
-            Il2CppClass *k = p_image_get_class(img, c);
-            if (!k) continue;
-            const char *nm = p_class_get_name(k);
-            if (nm && strcmp(nm, name) == 0) { found = k; break; }
-        }
-    }
-
-    if (!found) {
-        set_err("class not found: %s", name, NULL);
-        return NULL;
-    }
-
-    if (g_cacheN < CACHE_MAX) {
-        strncpy(g_cache[g_cacheN].name, name, sizeof(g_cache[0].name) - 1);
-        g_cache[g_cacheN].cls = found;
-        g_cacheN++;
-    }
-    return found;
-}
-
-void *XGI2Method(const char *className, const char *method, int argc) {
-    if (!XGI2Init() || !p_class_get_method_from_name) return NULL;
-    Il2CppClass *k = XGI2Class(className);
-    if (!k) return NULL;
-
-    const MethodInfo *m = p_class_get_method_from_name(k, method, argc);
-    if (!m) { set_err("method not found: %s::%s/%d", className, method); return NULL; }
-
-    // MethodInfo 首字段 = methodPointer
-    return *(void **)m;
-}
-
-uint32_t XGI2FieldOff(const char *className, const char *field) {
-    if (!XGI2Init() || !p_field_get_offset) return 0;
-    Il2CppClass *k = XGI2Class(className);
-    if (!k) return 0;
-    return (uint32_t)(uintptr_t)p_field_get_offset(k, field);
-}
-
-void *XGI2StaticData(const char *className) {
-    if (!XGI2Init() || !p_class_get_static_field_data) return NULL;
-    Il2CppClass *k = XGI2Class(className);
-    if (!k) return NULL;
-    return p_class_get_static_field_data(k);
-}
-
-void *XGI2Invoke(void *methodInfo, void *obj, void **params, void **exc) {
-    if (!XGI2Init() || !p_runtime_invoke || !methodInfo) return NULL;
-    return p_runtime_invoke(methodInfo, obj, params, exc);
-}
-
-void *XGI2Instance(const char *className) {
-    if (!XGI2Init() || !p_class_get_method_from_name) return NULL;
-    Il2CppClass *k = XGI2Class(className);
-    if (!k) return NULL;
-    const MethodInfo *getter = p_class_get_method_from_name(k, "get_Instance", 0);
-    if (!getter) getter = p_class_get_method_from_name(k, "get_instance", 0);
-    if (!getter) { set_err("no get_Instance on %s", className, NULL); return NULL; }
-    return p_runtime_invoke(getter, NULL, NULL, NULL);
-}
-
-// ============================================================================
-//  把全部类名导出到文件 —— 装上一次就不用再猜类名了
-// ============================================================================
-int XGI2DumpClassNames(const char *path) {
-    if (!XGI2Init() || !path) return 0;
-    FILE *f = fopen(path, "w");
-    if (!f) return 0;
-
-    size_t count = 0;
-    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &count);
-    int n = 0;
-    for (size_t a = 0; a < count; a++) {
-        Il2CppImage *img = p_assembly_get_image(asms[a]);
-        if (!img) continue;
-        size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
-        for (size_t c = 0; c < cc; c++) {
-            Il2CppClass *k = p_image_get_class(img, c);
-            if (!k) continue;
-            const char *nm = p_class_get_name(k);
-            const char *ns = p_class_get_namespace ? p_class_get_namespace(k) : "";
-            if (nm) { fprintf(f, "%s.%s\n", ns ? ns : "", nm); n++; }
-        }
-    }
-    fclose(f);
-    NSLog(@"[XG-I2] dumped %d class names -> %s", n, path);
-    return n;
-}
-
-
-// ============================================================================
-//  运行时自省：把一个类的字段/方法全打出来（含偏移）
-//  这是替代 dump.cs 的关键 —— 装上插件跑一次，配置就齐了。
-// ============================================================================
-int XGI2DumpFields(const char *className) {
-    if (!XGI2Init() || !p_class_get_fields || !p_field_get_name) return 0;
-    Il2CppClass *k = XGI2Class(className);
-    if (!k) { NSLog(@"[XG-I2] %s: class missing", className); return 0; }
-
-    int n = 0;
-    void *iter = NULL;
-    NSLog(@"[XG-I2] === %s 字段 ===", className);
-    while (1) {
-        void *f = p_class_get_fields(k, &iter);
-        if (!f) break;
-        const char *fn = p_field_get_name(f);
-        uint32_t off = p_field_get_offset ? (uint32_t)(uintptr_t)p_field_get_offset(k, fn) : 0;
-        NSLog(@"[XG-I2]   %s  @0x%x", fn, off);
-        n++;
-    }
-    NSLog(@"[XG-I2] === %s 共 %d 个字段 ===", className, n);
-    return n;
-}
-
-int XGI2DumpMethods(const char *className, const char *filter) {
-    if (!XGI2Init() || !p_class_get_methods || !p_method_get_name) return 0;
-    Il2CppClass *k = XGI2Class(className);
-    if (!k) return 0;
-
-    int n = 0, shown = 0;
-    void *iter = NULL;
-    NSLog(@"[XG-I2] === %s 方法%s%s ===", className,
-          filter ? " (筛选: " : "", filter ? filter : "");
-    while (1) {
-        void *m = p_class_get_methods(k, &iter);
-        if (!m) break;
-        const char *mn = p_method_get_name(m);
-        uint32_t argc = p_method_get_param_count ? p_method_get_param_count(m) : 0;
-        n++;
-        if (filter && (!mn || !strstr(mn, filter))) continue;
-        void *code = *(void **)m;
-        NSLog(@"[XG-I2]   %s/%u  @ %p", mn, argc, code);
-        shown++;
-    }
-    NSLog(@"[XG-I2] === %s 共 %d 个方法，显示 %d 个 ===", className, n, shown);
-    return n;
-}
-
-// 一次性探测：把配置里关心的类全部打印（装好后跑一次即可）
-void XGI2ProbeConfigured(void) {
-    static const char *classes[] = {
-        "Settle", "DoSettleRounds",
-        "BattlePhaseBaseHandler", "BattleTeamHandler",
-        "EnemyData", "EnemyMonsterData", "EnemyTakeDamageData",
-        "BoardMainView", "PuzzleView", "PuzzleGemDisplayHandler",
-        NULL
-    };
-    for (int i = 0; classes[i]; i++) {
-        Il2CppClass *k = XGI2Class(classes[i]);
-        if (!k) { NSLog(@"[XG-I2] (缺) %s", classes[i]); continue; }
-        XGI2DumpFields(classes[i]);
-    }
-}
-
-
-// ============================================================================
-//  探测结果落盘
-//  iOS 非越狱设备上 NSLog 只能通过 Console.app / idevicesyslog 看，
-//  直接写文件最省事：装完插件跑一次，用 Filza 把文件拷出来即可。
-// ============================================================================
-static FILE *g_pf = NULL;
-
-static void PLog(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    // 不要每行 fflush：几十万行会把闪存刷爆，主线程直接卡死
-    if (g_pf) { vfprintf(g_pf, fmt, ap); fputc('\n', g_pf); }
-    va_end(ap);
-}
-
-static void PLogC(NSString *s) {
-    if (!s) return;
-    PLog("%s", s.UTF8String);
-}
-
-/// 遍历全部 image 的全部类，写「类名 -> 字段+偏移 / 方法+入口」
-static int dumpAllClasses(FILE *f) {
-    if (!XGI2Init() || !f) return 0;
-    if (!p_domain_get_assemblies || !p_assembly_get_image) return 0;
-
-    size_t count = 0;
-    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &count);
-    if (!asms) return 0;
+    size_t n = 0;
+    const Il2CppAssembly **asms = p_domain_get_assemblies(p_domain_get(), &n);
+    if (!asms) { snprintf(g_err, sizeof(g_err), "assemblies 为空"); return 0; }
 
     int total = 0;
-    for (size_t a = 0; a < count; a++) {
+    for (size_t a = 0; a < n; a++) {
+        if (!asms[a]) continue;
         Il2CppImage *img = p_assembly_get_image(asms[a]);
         if (!img) continue;
         size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
@@ -298,91 +114,346 @@ static int dumpAllClasses(FILE *f) {
             if (!k) continue;
             const char *nm = p_class_get_name(k);
             if (!nm) continue;
-
-            // 只记录关心词根的类，避免文件过大
-            bool keep = strstr(nm, "Settle") || strstr(nm, "Battle") || strstr(nm, "Board") ||
-                        strstr(nm, "Puzzle") || strstr(nm, "Enemy") || strstr(nm, "Monster") ||
-                        strstr(nm, "Wave") || strstr(nm, "Stage") || strstr(nm, "Gem") ||
-                        strstr(nm, "Combo") || strstr(nm, "Skill") || strstr(nm, "Player") ||
-                        strstr(nm, "Team") || strstr(nm, "Deck") || strstr(nm, "Orb");
-            if (!keep) continue;
-
             const char *ns = p_class_get_namespace ? p_class_get_namespace(k) : "";
-            PLog("\n### %s.%s", ns ? ns : "", nm);
             total++;
-
-            if (p_class_get_fields && p_field_get_name) {
-                void *it = NULL;
-                int nf = 0;
-                while (1) {
-                    void *fd = p_class_get_fields(k, &it);
-                    if (!fd) break;
-                    const char *fn = p_field_get_name(fd);
-                    if (!fn) continue;
-                    uint32_t off = p_field_get_offset ? (uint32_t)(uintptr_t)p_field_get_offset(k, fn) : 0;
-                    PLog("  F %-34s @0x%x", fn, off);
-                    nf++;
-                    if (nf > 40) break;   // 字段上限，防止超大类拖慢
-                }
-            }
-            if (p_class_get_methods && p_method_get_name) {
-                void *it = NULL;
-                int nm2 = 0;
-                while (1) {
-                    void *m = p_class_get_methods(k, &it);
-                    if (!m) break;
-                    const char *mn = p_method_get_name(m);
-                    if (!mn) continue;
-                    uint32_t argc = p_method_get_param_count ? p_method_get_param_count(m) : 0;
-                    void *code = *(void **)m;
-                    PLog("  M %-34s /%u  @ %p", mn, argc, code);
-                    nm2++;
-                    if (nm2 > 60) break;   // 方法上限
-                }
-            }
+            if (cb) cb(k, nm, ns ? ns : "", ctx);
         }
     }
     return total;
 }
 
-int XGI2ProbeToFile(const char *path) {
-    if (!XGI2Init()) return 0;
+// ---- 按名找类（带缓存）----
+#define CACHE_MAX 64
+static struct { char name[80]; Il2CppClass *cls; } g_cache[CACHE_MAX];
+static int g_cacheN = 0;
 
-    NSString *target = path ? [NSString stringWithUTF8String:path] : nil;
+struct FindCtx { const char *want; Il2CppClass *found; };
+
+static void findCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) {
+    struct FindCtx *f = (struct FindCtx *)ctx;
+    if (!f->found && strcmp(nm, f->want) == 0) f->found = k;
+}
+
+Il2CppClass *XGI2Class(const char *name) {
+    if (!name || !*name) return NULL;
+    for (int i = 0; i < g_cacheN; i++)
+        if (strcmp(g_cache[i].name, name) == 0 && g_cache[i].cls) return g_cache[i].cls;
+
+    struct FindCtx f = { name, NULL };
+    walkClasses(findCb, &f);
+    if (!f.found) {
+        snprintf(g_err, sizeof(g_err), "class not found: %s", name);
+        return NULL;
+    }
+    if (g_cacheN < CACHE_MAX) {
+        strncpy(g_cache[g_cacheN].name, name, sizeof(g_cache[0].name) - 1);
+        g_cache[g_cacheN].cls = f.found;
+        g_cacheN++;
+    }
+    return f.found;
+}
+
+// ---- 按名找字段（FieldInfo*），offset 只认 FieldInfo* ----
+FieldInfo *XGI2FindField(Il2CppClass *k, const char *field) {
+    if (!k || !field || !p_class_get_fields || !p_field_get_name) return NULL;
+    void *iter = NULL;
+    for (int guard = 0; guard < 4000; guard++) {
+        FieldInfo *f = p_class_get_fields(k, &iter);
+        if (!f) break;
+        const char *fn = p_field_get_name(f);
+        if (fn && strcmp(fn, field) == 0) return f;
+    }
+    return NULL;
+}
+
+uint32_t XGI2FieldOff(const char *className, const char *field) {
+    if (!XGI2Init() || !p_field_get_offset) return 0;
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return 0;
+    FieldInfo *f = XGI2FindField(k, field);
+    if (!f) return 0;
+    return (uint32_t)p_field_get_offset(f);     // ★ 只传 FieldInfo*
+}
+
+// 给定已拿到的 Il2CppClass* 直接取字段偏移（静态字段也走这里，返回相对偏移）
+uint32_t XGI2FieldOffOfClass(void *klass, const char *field) {
+    if (!klass || !field || !p_field_get_offset) return 0;
+    FieldInfo *f = XGI2FindField((Il2CppClass *)klass, field);
+    if (!f) return 0;
+    return (uint32_t)p_field_get_offset(f);
+}
+
+// ---- 方法入口 ----
+void *XGI2Method(const char *className, const char *method, int argc) {
+    if (!XGI2Init() || !p_class_get_method_from_name) return NULL;
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return NULL;
+    const MethodInfo *m = p_class_get_method_from_name(k, method, argc);
+    if (!m) {
+        snprintf(g_err, sizeof(g_err), "method not found: %s::%s/%d", className, method);
+        return NULL;
+    }
+    return *(void **)m;     // MethodInfo 首字段 = methodPointer
+}
+
+void *XGI2StaticData(const char *className) {
+    // 静态字段在 il2cpp 里从 class 的 static field data 起步；这里保留接口，
+    // 实际取偏移用 XGI2FieldOff（对静态字段返回的也是相对偏移）
+    Il2CppClass *k = XGI2Class(className);
+    return k ? (void *)k : NULL;
+}
+
+void *XGI2Invoke(void *methodInfo, void *obj, void **params, void **exc) {
+    if (!XGI2Init() || !p_runtime_invoke || !methodInfo) return NULL;
+    return p_runtime_invoke(methodInfo, obj, params, exc);
+}
+
+void *XGI2Instance(const char *className) {
+    if (!XGI2Init() || !p_class_get_method_from_name || !p_runtime_invoke) return NULL;
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return NULL;
+    const MethodInfo *g = p_class_get_method_from_name(k, "get_Instance", 0);
+    if (!g) g = p_class_get_method_from_name(k, "get_instance", 0);
+    if (!g) g = p_class_get_method_from_name(k, "Instance", 0);
+    if (!g) { snprintf(g_err, sizeof(g_err), "no Instance on %s", className); return NULL; }
+    return p_runtime_invoke(g, NULL, NULL, NULL);
+}
+
+// ============================================================================
+//  分阶段探测 —— 每阶段落盘 + 独立标记
+//
+//  设计原因：上一版一次性 dump，一旦某个类上 API 崩掉，整个进程没了、
+//  文件也没留下信息，无法定位。现在拆成 Phase A/B/C，每阶段结束立刻 fflush，
+//  崩了也能从已有内容判断停在哪一步。
+// ============================================================================
+
+static FILE *g_pf = NULL;
+static char  g_pfPath[512] = {0};
+
+static void PLog(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    if (g_pf) { vfprintf(g_pf, fmt, ap); fputc('\n', g_pf); }
+    va_end(ap);
+}
+
+static void PFlush(const char *mark) {
+    if (!g_pf) return;
+    PLog("[phase %s done]", mark);
+    fflush(g_pf);
+}
+
+static const char *kKeep[] = {
+    "Settle", "Battle", "Board", "Puzzle", "Enemy", "Monster",
+    "WaveData", "StageData", "GemBoard", "Combo", "SkillCtrl",
+    "PlayerData", "TeamData", "DeckData", NULL
+};
+
+static bool keepClass(const char *nm) {
+    for (int i = 0; kKeep[i]; i++)
+        if (strstr(nm, kKeep[i])) return true;
+    return false;
+}
+
+// Phase A：只数 image / 类，不碰字段
+static int phaseA(void) {
+    if (!XGI2Init()) return -1;
+    size_t n = 0;
+    const Il2CppAssembly **asms = p_domain_get_assemblies
+        ? p_domain_get_assemblies(p_domain_get(), &n) : NULL;
+    PLog("assemblies=%zu ptr=%p", n, (void *)asms);
+    if (!asms) return -1;
+
+    int total = 0, images = 0;
+    for (size_t a = 0; a < n; a++) {
+        if (!asms[a]) continue;
+        Il2CppImage *img = p_assembly_get_image ? p_assembly_get_image(asms[a]) : NULL;
+        if (!img) continue;
+        images++;
+        size_t cc = p_image_get_class_count ? p_image_get_class_count(img) : 0;
+        PLog("  image[%zu] classes=%zu", a, cc);
+        total += (int)cc;
+        if (a > 40) { PLog("  ... (只列前 40 个 image)"); break; }
+    }
+    PLog("images=%d total_classes=%d", images, total);
+    return total;
+}
+
+// Phase B：只写类名（不取字段/方法）
+struct NameCtx { int n; };
+static void nameCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) {
+    struct NameCtx *c = (struct NameCtx *)ctx;
+    if (keepClass(nm)) {
+        PLog("CLS %s.%s", ns, nm);
+        c->n++;
+    }
+}
+static int phaseB(void) {
+    struct NameCtx c = { 0 };
+    walkClasses(nameCb, &c);
+    PLog("kept_classes=%d", c.n);
+    return c.n;
+}
+
+// Phase C：对命中的类取字段/方法（上限保护）
+struct DetailCtx { int classes; };
+static void detailCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) {
+    struct DetailCtx *c = (struct DetailCtx *)ctx;
+    if (!keepClass(nm)) return;
+    if (c->classes > 400) return;          // 最多详情 400 个类
+
+    PLog("\n### %s.%s", ns, nm);
+    c->classes++;
+
+    if (p_class_get_fields && p_field_get_name && p_field_get_offset) {
+        void *it = NULL;
+        int nf = 0;
+        while (nf < 40) {
+            FieldInfo *f = p_class_get_fields(k, &it);
+            if (!f) break;
+            const char *fn = p_field_get_name(f);
+            if (!fn) continue;
+            size_t off = p_field_get_offset(f);   // ★ 单参数
+            PLog("  F %-36s @0x%zx", fn, off);
+            nf++;
+        }
+    }
+    if (p_class_get_method_from_name) {
+        // 方法遍历没有稳定 API，退而用命名知识：探几个常见名字
+        static const char *common[] = {
+            "DoSettleRounds", "Settle", "GetSettleResult", "OnStageClear",
+            "Start", "Update", "Awake", "get_Instance", NULL
+        };
+        static const int argcs[] = { 0, 1, 2 };
+        for (int i = 0; common[i]; i++) {
+            for (int a = 0; a < 3; a++) {
+                const MethodInfo *m = p_class_get_method_from_name(k, common[i], argcs[a]);
+                if (m) { PLog("  M %-36s /%d  @ %p", common[i], argcs[a], *(void **)m); break; }
+            }
+        }
+    }
+}
+static int phaseC(void) {
+    struct DetailCtx c = { 0 };
+    walkClasses(detailCb, &c);
+    PLog("detail_classes=%d", c.classes);
+    return c.classes;
+}
+
+int XGI2ProbeToFile(const char *path) {
+    if (!XGI2Init()) {
+        NSLog(@"[XG-I2] probe: il2cpp 未就绪");
+        return 0;
+    }
+
+    // 选一个能写的路径
     NSMutableArray<NSString *> *cands = [NSMutableArray array];
-    if (target) [cands addObject:target];
+    if (path) [cands addObject:[NSString stringWithUTF8String:path]];
     [cands addObject:@"/var/mobile/Documents/XG_probe.txt"];
     NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     if (docs) [cands addObject:[docs stringByAppendingPathComponent:@"XG_probe.txt"]];
     [cands addObject:[NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_probe.txt"]];
 
+    FILE *f = NULL;
     for (NSString *p in cands) {
         NSString *dir = [p stringByDeletingLastPathComponent];
         [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                                  withIntermediateDirectories:YES attributes:nil error:nil];
-        FILE *f = fopen(p.UTF8String, "w");
-        if (!f) continue;
-
-        g_pf = f;
-        PLog("=== XiuGou probe  %s ===", [[NSDate date] description].UTF8String);
-        PLog("bundle=%s  pid=%d", [[[NSBundle mainBundle] bundleIdentifier] UTF8String], getpid());
-
-        const struct mach_header_64 *hdr = NULL;
-        for (uint32_t i = 0; i < _dyld_image_count(); i++) {
-            const char *nm = _dyld_get_image_name(i);
-            if (nm && strstr(nm, "UnityFramework")) { hdr = (void *)_dyld_get_image_header(i); break; }
-        }
-        PLog("UnityFramework base = %p", hdr);
-
-        int n = dumpAllClasses(f);
-        PLog("\n=== 共导出 %d 个类 ===", n);
-
-        if (g_pf) fflush(g_pf);   // 只在这里刷一次
-        g_pf = NULL;
-        fclose(f);
-        NSLog(@"[XG-I2] probe -> %@ (%d classes)", p, n);
-        return (int)[[NSFileManager defaultManager] attributesOfItemAtPath:p error:nil].fileSize;
+                                 withIntermediateDirectories:YES attributes:nil error:nil];
+        f = fopen(p.UTF8String, "w");
+        if (f) { strncpy(g_pfPath, p.UTF8String, sizeof(g_pfPath) - 1); break; }
     }
-    NSLog(@"[XG-I2] probe 无法写入任何路径");
-    return 0;
+    if (!f) { NSLog(@"[XG-I2] probe: 无法写文件"); return 0; }
+
+    g_pf = f;
+    PLog("=== XiuGou probe ===");
+    PLog("time=%s", [[NSDate date] description].UTF8String);
+    PLog("pid=%d uid=%d", getpid(), getuid());
+
+    const char *unityBase = NULL;
+    char basebuf[64];
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *nm = _dyld_get_image_name(i);
+        if (nm && strstr(nm, "UnityFramework")) {
+            snprintf(basebuf, sizeof(basebuf), "%p", (void *)_dyld_get_image_header(i));
+            unityBase = basebuf;
+            break;
+        }
+    }
+    PLog("UnityFramework base=%s", unityBase ? unityBase : "NOT FOUND");
+    PFlush("A-header");
+
+    int total = phaseA();
+    PFlush("B-enum");
+    if (total < 0) {
+        PLog("!! assemblies 枚举失败，提前结束");
+        fflush(g_pf); g_pf = NULL; fclose(f);
+        NSLog(@"[XG-I2] probe 失败 -> %@", [NSString stringWithUTF8String:g_pfPath]);
+        return 0;
+    }
+
+    int kept = phaseB();
+    PFlush("C-names");
+
+    int det = phaseC();
+    PFlush("D-detail");
+
+    PLog("\n=== summary: total=%d kept=%d detail=%d ===", total, kept, det);
+    fflush(g_pf);
+    g_pf = NULL;
+    fclose(f);
+
+    NSLog(@"[XG-I2] probe 完成 -> %s", g_pfPath);
+    return (int)[[NSFileManager defaultManager] attributesOfItemAtPath:
+                 [NSString stringWithUTF8String:g_pfPath] error:nil].fileSize;
+}
+
+int XGI2DumpClassNames(const char *path) {
+    if (!XGI2Init() || !path) return 0;
+    FILE *f = fopen(path, "w");
+    if (!f) return 0;
+    g_pf = f;
+    struct NameCtx c = { 0 };
+    walkClasses(nameCb, &c);
+    fflush(f); g_pf = NULL; fclose(f);
+    return c.n;
+}
+
+// ---- 兼容旧接口 ----
+int XGI2DumpFields(const char *className) {
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return 0;
+    int n = 0;
+    void *it = NULL;
+    while (p_class_get_fields) {
+        FieldInfo *f = p_class_get_fields(k, &it);
+        if (!f) break;
+        const char *fn = p_field_get_name ? p_field_get_name(f) : "?";
+        size_t off = p_field_get_offset ? p_field_get_offset(f) : 0;
+        NSLog(@"[XG-I2]   %s @0x%zx", fn, off);
+        n++;
+    }
+    return n;
+}
+
+int XGI2DumpMethods(const char *className, const char *filter) {
+    Il2CppClass *k = XGI2Class(className);
+    if (!k || !p_class_get_method_from_name) return 0;
+    static const char *common[] = {
+        "DoSettleRounds", "Settle", "OnStageClear", "Start", "Update", "Awake", NULL
+    };
+    int n = 0;
+    for (int i = 0; common[i]; i++) {
+        for (int a = 0; a < 3; a++) {
+            const MethodInfo *m = p_class_get_method_from_name(k, common[i], a);
+            if (m) { NSLog(@"[XG-I2] %s::%s/%d @ %p", className, common[i], a, *(void **)m); n++; break; }
+        }
+    }
+    return n;
+}
+
+void XGI2ProbeConfigured(void) {
+    // 由 XGI2ProbeToFile 统一处理；这里只做一次轻量统计
+    struct NameCtx c = { 0 };
+    walkClasses(nameCb, &c);
+    NSLog(@"[XG-I2] 命中类 %d 个", c.n);
 }
