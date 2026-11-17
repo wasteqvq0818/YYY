@@ -44,6 +44,8 @@ static const char    *(*p_field_get_name)(FieldInfo *);
 static size_t         (*p_field_get_offset)(FieldInfo *);      // ★ 单参数
 static uint32_t       (*p_method_get_param_count)(const MethodInfo *);
 static void          *(*p_runtime_invoke)(const void *, void *, void **, void **);
+static void          *(*p_class_get_methods)(Il2CppClass *, void **);
+static const char    *(*p_method_get_name)(const void *);
 static void          *(*p_class_get_static_field_data)(Il2CppClass *);
 static void           (*p_runtime_class_init)(Il2CppClass *);
 
@@ -78,6 +80,10 @@ bool XGI2Init(void) {
     p_method_get_param_count  = (uint32_t (*)(const MethodInfo *))dlsym(h, "il2cpp_method_get_param_count");
     p_runtime_invoke          = (void *(*)(const void *, void *, void **, void **))
                                 dlsym(h, "il2cpp_runtime_invoke");
+    p_class_get_methods       = (void *(*)(Il2CppClass *, void **))
+                                dlsym(h, "il2cpp_class_get_methods");
+    p_method_get_name         = (const char *(*)(const void *))
+                                dlsym(h, "il2cpp_method_get_name");
     p_class_get_static_field_data = (void *(*)(Il2CppClass *))
                                 dlsym(h, "il2cpp_class_get_static_field_data");
     p_runtime_class_init      = (void (*)(Il2CppClass *))
@@ -571,4 +577,103 @@ void XGI2ProbeConfigured(void) {
     struct NameCtx c = { 0 };
     walkClasses(nameCb, &c);
     NSLog(@"[XG-I2] 命中类 %d 个", c.n);
+}
+
+
+// ============================================================================
+//  v13 探测：遍历全部类的方法名，找「胜利/结算/死亡」相关函数
+//
+//  依据：逆向 XiuGou 得知它不写内存，而是 dlsym 找游戏函数后直接调用。
+//  所以正确做法是拿到游戏自己的方法地址，而不是猜字段偏移。
+// ============================================================================
+static const char *kMethodKW[] = {
+    "settle", "result", "win", "lose", "clear", "finish", "victory", "defeat",
+    "die", "dead", "kill", "gameover", "checkend", "endbattle", "battleend",
+    "damage", "hurt", "attack", "hp", "boss", "wave", "round", "turn",
+    NULL
+};
+
+static bool methodNameHit(const char *n) {
+    if (!n) return false;
+    for (int i = 0; kMethodKW[i]; i++) {
+        // 大小写不敏感的子串匹配
+        const char *h = n, *needle = kMethodKW[i];
+        size_t nl = strlen(needle);
+        for (; *h; h++) {
+            size_t k = 0;
+            while (k < nl && h[k] &&
+                   tolower((unsigned char)h[k]) == tolower((unsigned char)needle[k])) k++;
+            if (k == nl) return true;
+        }
+    }
+    return false;
+}
+
+struct MethodScanCtx { int classes, methods, hits; };
+
+static void methodScanCb(Il2CppClass *k, const char *nm, const char *ns, void *ctx) {
+    struct MethodScanCtx *c = (struct MethodScanCtx *)ctx;
+    if (!p_class_get_methods || !p_method_get_name) return;
+
+    c->classes++;
+    void *it = NULL;
+    bool printedClass = false;
+
+    for (int guard = 0; guard < 400; guard++) {
+        void *m = p_class_get_methods(k, &it);
+        if (!m) break;
+        c->methods++;
+
+        const char *mn = p_method_get_name(m);
+        if (!methodNameHit(mn)) continue;
+
+        if (!printedClass) {
+            PLog("\n### %s.%s", ns, nm);
+            printedClass = true;
+        }
+        void *code = *(void **)m;
+        PLog("  M %-40s @ %p", mn, code);
+        c->hits++;
+        if (c->hits > 4000) return;
+    }
+}
+
+int XGI2ProbeMethods(const char *path) {
+    if (!XGI2Init()) return 0;
+
+    NSMutableArray<NSString *> *cands = [NSMutableArray array];
+    if (path) [cands addObject:[NSString stringWithUTF8String:path]];
+    [cands addObject:@"/var/mobile/Documents/XG_methods.txt"];
+    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    if (docs) [cands addObject:[docs stringByAppendingPathComponent:@"XG_methods.txt"]];
+    [cands addObject:[NSTemporaryDirectory() stringByAppendingPathComponent:@"XG_methods.txt"]];
+
+    FILE *f = NULL;
+    for (NSString *pp in cands) {
+        [[NSFileManager defaultManager] createDirectoryAtPath:[pp stringByDeletingLastPathComponent]
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        f = fopen(pp.UTF8String, "w");
+        if (f) {
+            strncpy(XGProbePathBuf, pp.UTF8String, sizeof(XGProbePathBuf) - 1);
+            break;
+        }
+    }
+    if (!f) return 0;
+
+    g_pf = f;
+    PLog("=== XiuGou 方法名扫描 ===");
+    PLog("time=%s pid=%d", [[NSDate date] description].UTF8String, getpid());
+
+    struct MethodScanCtx ctx = { 0, 0, 0 };
+    walkClasses(methodScanCb, &ctx);
+
+    PLog("\n=== 类 %d 个｜方法 %d 个｜命中 %d 个 ===", ctx.classes, ctx.methods, ctx.hits);
+    fflush(g_pf);
+    g_pf = NULL;
+    fclose(f);
+
+    XGProbeBytes = ctx.hits;
+    XGProbeState = 1;
+    NSLog(@"[XG-I2] 方法扫描完成：类 %d 方法 %d 命中 %d", ctx.classes, ctx.methods, ctx.hits);
+    return ctx.hits;
 }
