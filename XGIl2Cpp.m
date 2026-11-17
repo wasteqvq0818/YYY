@@ -227,6 +227,10 @@ void *XGI2Instance(const char *className) {
 //  崩了也能从已有内容判断停在哪一步。
 // ============================================================================
 
+char XGProbePathBuf[512] = {0};
+int  XGProbeBytes = 0;
+int  XGProbeState = 0;   // 0=未跑 1=成功 2=失败
+
 static FILE *g_pf = NULL;
 static char  g_pfPath[512] = {0};
 
@@ -342,6 +346,7 @@ static int phaseC(void) {
 
 int XGI2ProbeToFile(const char *path) {
     if (!XGI2Init()) {
+        XGProbeState = 2;
         NSLog(@"[XG-I2] probe: il2cpp 未就绪");
         return 0;
     }
@@ -362,7 +367,11 @@ int XGI2ProbeToFile(const char *path) {
         f = fopen(p.UTF8String, "w");
         if (f) { strncpy(g_pfPath, p.UTF8String, sizeof(g_pfPath) - 1); break; }
     }
-    if (!f) { NSLog(@"[XG-I2] probe: 无法写文件"); return 0; }
+    if (!f) {
+        XGProbeState = 2;
+        NSLog(@"[XG-I2] probe: 所有候选路径都写不进去");
+        return 0;
+    }
 
     g_pf = f;
     PLog("=== XiuGou probe ===");
@@ -402,9 +411,13 @@ int XGI2ProbeToFile(const char *path) {
     g_pf = NULL;
     fclose(f);
 
-    NSLog(@"[XG-I2] probe 完成 -> %s", g_pfPath);
-    return (int)[[NSFileManager defaultManager] attributesOfItemAtPath:
-                 [NSString stringWithUTF8String:g_pfPath] error:nil].fileSize;
+    int sz = (int)[[NSFileManager defaultManager] attributesOfItemAtPath:
+                   [NSString stringWithUTF8String:g_pfPath] error:nil].fileSize;
+    strncpy(XGProbePathBuf, g_pfPath, sizeof(XGProbePathBuf) - 1);
+    XGProbeBytes = sz;
+    XGProbeState = 1;
+    NSLog(@"[XG-I2] probe 完成 -> %s (%d 字节)", g_pfPath, sz);
+    return sz;
 }
 
 int XGI2DumpClassNames(const char *path) {
