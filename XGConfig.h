@@ -121,6 +121,7 @@ int  XGInstallInlineHooks(void);
 void XGZeroBattleZoneAsync(void);   // 终版：走 Labyrinth.BattleZoneEnemy 静态链
 int  XGZBHits(void);
 int  XGZBChanged(void);
+int  XGZBRan(void);
 const char *XGZBMessage(void);
 void XGZeroEnemiesAsync(void);   // 精确清血（走 EnemyInstance.mData 链）
 int  XGZeroHits(void);
