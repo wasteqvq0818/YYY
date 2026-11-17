@@ -2262,3 +2262,131 @@ void XGDieCallAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v38 · 连续调用 EnemyDie
+//
+//  实测（v37）：直接调 methodPointer 的 EnemyDie() 确实有效 ——
+//  多个敌人时会消失一个、血条同步变化。说明调用方式是对的。
+//
+//  但一次只处理一个：游戏在 EnemyDie 内部会把该对象从列表移除，
+//  导致循环里后续索引错位，所以一口气 for 循环只会杀第一个。
+//
+//  改成定时器：每 0.25 秒读一次最新列表，取第一个，调一次 EnemyDie，
+//  等游戏自己处理完，再处理下一个 —— 直到列表为空。
+// ============================================================================
+
+static volatile int g_killRunning = 0;
+static NSTimer *g_killTimer = nil;
+static int g_killCount = 0;
+static int g_killIdle = 0;
+static char g_killAllMsg[256] = "未执行";
+
+int  XGKillAllRunning(void) { return g_killRunning; }
+int  XGKillAllCount(void)   { return g_killCount; }
+const char *XGKillAllMsg(void) { return g_killAllMsg; }
+
+static void XGKillTick(void) {
+    @autoreleasepool {
+        if (!g_killRunning || !XGI2Init()) return;
+
+        uintptr_t list = 0;
+        if (!XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) || list < 0x10000) {
+            g_killIdle++;
+            if (g_killIdle > 8) {
+                snprintf(g_killAllMsg, sizeof(g_killAllMsg), "列表不可用，已停止（共杀 %d）", g_killCount);
+                XGKillAllStop();
+            }
+            return;
+        }
+
+        int32_t count = 0;
+        SafeRead(list + XG_ACC_LIST_SIZE, &count, 4);
+        if (count <= 0) {
+            DLog("[连杀] 列表已空，停止。共处理 %d 个", g_killCount);
+            snprintf(g_killAllMsg, sizeof(g_killAllMsg), "完成：共处理 %d 个敌人", g_killCount);
+            XGKillAllStop();
+            return;
+        }
+
+        uintptr_t items = 0;
+        SafeRead(list + XG_ACC_LIST_ITEMS, &items, 8);
+        if (!items || items < 0x10000) return;
+
+        // 取第一个
+        uintptr_t inst = 0;
+        if (!SafeRead(items + XG_ACC_ARRAY_DATA, &inst, 8) || inst < 0x10000) {
+            g_killIdle++;
+            if (g_killIdle > 8) XGKillAllStop();
+            return;
+        }
+
+        void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+        if (kInst && ReadKlass(inst) != kInst) {
+            // 第一个不是 EnemyInstance，扫一下列表找有效的
+            inst = 0;
+            for (int i = 0; i < count && i < 16; i++) {
+                uintptr_t cand = 0;
+                if (!SafeRead(items + XG_ACC_ARRAY_DATA + i * 8, &cand, 8) || cand < 0x10000) continue;
+                if (ReadKlass(cand) == kInst) { inst = cand; break; }
+            }
+            if (!inst) { g_killIdle++; if (g_killIdle > 8) XGKillAllStop(); return; }
+        }
+
+        // 拿方法指针（缓存）
+        static void *mpDie = NULL;
+        static int tried = 0;
+        if (!tried) {
+            tried = 1;
+            mpDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "EnemyDie", 0);
+            if (!mpDie) mpDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 1);
+            if (!mpDie) mpDie = XGI2Method(XG_ENEMY_INSTANCE_CLASS, "Die", 0);
+            DLog("[连杀] 方法指针 = %p", mpDie);
+        }
+        if (!mpDie) { XGKillAllStop(); return; }
+
+        // 清血 + 关防秒杀，再调死亡流程
+        void *kData = XGI2Class(XG_ENEMY_CLASS);
+        uintptr_t mData = 0;
+        if (SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) && mData > 0x10000 &&
+            (!kData || ReadKlass(mData) == kData)) {
+            uint8_t zero16[XG_ACC_DECIMAL_SIZE];
+            memset(zero16, 0, sizeof(zero16));
+            SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16));
+        }
+        float zf = 0.0f;
+        SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
+        uint8_t b0 = 0;
+        SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
+        SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);
+
+        DLog("[连杀] 第 %d 个: inst=0x%lx (剩余 %d)", g_killCount + 1, (unsigned long)inst, count);
+        ((void (*)(void *))mpDie)((void *)inst);
+        g_killCount++;
+        g_killIdle = 0;
+
+        snprintf(g_killAllMsg, sizeof(g_killAllMsg),
+                 "已处理 %d 个（列表原剩 %d）", g_killCount, count);
+    }
+}
+
+void XGKillAllStart(void) {
+    if (g_killRunning) return;
+    g_killRunning = 1;
+    g_killCount = 0;
+    g_killIdle = 0;
+    snprintf(g_killAllMsg, sizeof(g_killAllMsg), "开始连续处理…");
+    DLog("\n===== 连续杀 %s =====", [[NSDate date] description].UTF8String);
+
+    g_killTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
+                                                   repeats:YES
+                                                     block:^(NSTimer *t) { XGKillTick(); }];
+    NSLog(@"[XG] 连续杀开始");
+}
+
+void XGKillAllStop(void) {
+    g_killRunning = 0;
+    if (g_killTimer) { [g_killTimer invalidate]; g_killTimer = nil; }
+    DLog("[连杀] 停止，共处理 %d 个", g_killCount);
+}
