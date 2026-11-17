@@ -154,9 +154,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"🎯 Hook 血量读取（让游戏看到 0 血）";
+        c.textLabel.text = XGMonitorActive() ? @"⏹ 停止监视" : @"👁 开始监视（对比 XiuGou）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"inline hook get_mCurrentHP，任何读取都返回 0";
+        c.detailTextLabel.text = @"装好后去开 XiuGou 的快速胜利，日志里看哪个值变了";
     } else if (ip.row == 1) {
         c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d）",
                             XG.conf.stageCurrent, XG.conf.stageTotal];
@@ -203,8 +203,10 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        if (XGHookHPGetter()) { [self refreshHeader]; [tv reloadData]; }
-        else { [self refreshHeader]; }
+        if (XGMonitorActive()) XGMonitorStop();
+        else XGMonitorStart();
+        [self refreshHeader];
+        [tv reloadData];
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
