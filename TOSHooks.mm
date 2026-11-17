@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <libkern/OSCacheControl.h>
 
 #import "XGConfig.h"
 #import "XGOverlay.h"
@@ -702,7 +703,7 @@ static void *InlineHook(void *target, void *replacement, void **trampoline) {
         return NULL;
     }
     // 确保指令缓存同步（ARM64 必须）
-    __builtin___clear_cache((char *)t, (char *)t + 16);
+    sys_icache_invalidate((void *)t, 16);   // ARM64 指令缓存同步（iOS 提供）
 
     if (trampoline) *trampoline = (void *)code;
     NSLog(@"[XG] inline hook 成功: 0x%lx -> %p (跳板 %p)",
