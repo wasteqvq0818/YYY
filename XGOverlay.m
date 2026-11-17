@@ -92,7 +92,8 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
     const char *sm;
-    if (XGCallRan())           sm = XGCallDieMsg();
+    if (XGPatchEnemyCount() > 0) sm = XGPatchMsg();
+    else if (XGCallRan())      sm = XGCallDieMsg();
     else if (XGKillRan())      sm = XGKillMessage();
     else if (XGZBRan())        sm = XGZBMessage();
     else if (XGZeroHits() > 0) sm = XGZeroMessage();
@@ -153,9 +154,9 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = @"⚡ 直接调 EnemyDie（绕过 runtime_invoke）";
+        c.textLabel.text = @"💉 改缓存敌人血量 = 1（XiuGou 做法）";
         c.textLabel.textColor = [UIColor colorWithRed:0.3 green:1.0 blue:0.5 alpha:1.0];
-        c.detailTextLabel.text = @"清血后直接调用方法指针 EnemyDie()，不封送";
+        c.detailTextLabel.text = @"改 RESTORE_CACHE 里 extras.hp，重进关卡一击必杀";
     } else if (ip.row == 1) {
         c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d）",
                             XG.conf.stageCurrent, XG.conf.stageTotal];
@@ -202,7 +203,7 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGCallEnemyDieAsync();
+        XGPatchCacheAsync();
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
