@@ -1,8 +1,14 @@
 #ifndef XG_CONFIG_H
 #define XG_CONFIG_H
 
+
+
 #import <Foundation/Foundation.h>
 #include "XGSettlement.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // ============================================================================
 //  偏移与类名 —— 全部集中在这里，dump 完一次填完
@@ -82,4 +88,8 @@ void XGLoadConfig(void);
 void XGSaveConfig(void);
 const char *XGFeatureName(XGFeature f);
 
+
+#ifdef __cplusplus
+}
+#endif
 #endif
