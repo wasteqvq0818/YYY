@@ -308,7 +308,8 @@ static void XGBoot(void) {
             if (XG.on[F_DEBUG_PROBE]) {
                 NSLog(@"[XG] === 字段探测开始 ===");
                 XGI2ProbeConfigured();
-                NSLog(@"[XG] === 字段探测结束 ===");
+                int bytes = XGI2ProbeToFile(NULL);
+                NSLog(@"[XG] === 字段探测完成：%d 字节，文件在 /var/mobile/Documents/XG_probe.txt ===", bytes);
             }
 
             [XGOverlay install];
