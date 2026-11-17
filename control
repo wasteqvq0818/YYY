@@ -1,0 +1,9 @@
+Package: com.lab.xiugou
+Name: XiuGou
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 神魔之塔辅助（自动转珠 / 无限技能 / 无敌 / 秒杀 / 倍率 / 加时）
+Maintainer: lab
+Author: lab
+Section: Tweaks
+Depends: mobilesubstrate
