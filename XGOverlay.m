@@ -133,7 +133,7 @@ static UIWindow *XGHostWindow(void) {
     return @"操作";
 }
 
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 3; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 5; }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
@@ -148,12 +148,20 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0];
         c.detailTextLabel.text = @"在战斗界面点这个：扫内存找敌人，血量归零";
     } else if (ip.row == 1) {
-        c.textLabel.text = @"🔍 扫描方法名（找胜利函数）";
+        c.textLabel.text = @"💀 调用 Die（杀所有敌人）";
+        c.textLabel.textColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.3 alpha:1.0];
+        c.detailTextLabel.text = @"找场上 EnemyInstance，调游戏自己的 Die() 方法";
+    } else if (ip.row == 2) {
+        c.textLabel.text = @"🏆 直接触发胜利（Victory）";
+        c.textLabel.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.3 alpha:1.0];
+        c.detailTextLabel.text = @"调 Labyrinth.Victory()，跳过整场战斗";
+    } else if (ip.row == 3) {
+        c.textLabel.text = @"🔍 扫描方法名";
         c.textLabel.textColor = [UIColor colorWithRed:0.45 green:0.7 blue:1.0 alpha:1.0];
-        c.detailTextLabel.text = @"遍历所有类的方法名，找 settle/win/die 等，结果写文件";
+        c.detailTextLabel.text = @"重新导出方法清单到 XG_methods.txt";
     } else {
         c.textLabel.text = @"🔄 刷新状态";
-        c.detailTextLabel.text = @"扫描是后台跑的，状态不会自动刷";
+        c.detailTextLabel.text = @"调用是后台跑的，状态不会自动刷";
     }
     return c;
 }
@@ -169,6 +177,16 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
+        XGCallDieAsync();
+        [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
+    } else if (ip.row == 2) {
+        XGForceVictoryAsync();
+        [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
+    } else if (ip.row == 3) {
         XGScanMethodsAsync();
         [self refreshHeader];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)),
