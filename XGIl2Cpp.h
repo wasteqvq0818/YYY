@@ -39,6 +39,9 @@ void *XGI2Method(const char *className, const char *method, int argc);
 // 字段偏移（实例字段）。失败返回 0
 uint32_t XGI2FieldOff(const char *className, const char *field);
 
+// 给定 Il2CppClass* 直接取字段偏移（避免再走一次全量遍历）
+uint32_t XGI2FieldOffOfClass(void *klass, const char *field);
+
 // 静态字段数据区指针（静态字段用它 + offset）
 void *XGI2StaticData(const char *className);
 
