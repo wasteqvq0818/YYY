@@ -85,7 +85,8 @@ jobs:
           echo "--- 依赖 ---"
           llvm-objdump --macho --dylibs-used XiuGou.dylib 2>/dev/null | head -20 || true
 
-      - name: 签名
+      - name: 签名（可选，失败不影响产物）
+        continue-on-error: true
         run: |
           set -e
           URL=$(curl -sL https://api.github.com/repos/ProcursusTeam/ldid/releases/latest \
@@ -94,12 +95,13 @@ jobs:
           echo "ldid: $URL"
           if [ -n "$URL" ]; then
             curl -sL -o /tmp/ldid "$URL" && chmod +x /tmp/ldid && sudo mv /tmp/ldid /usr/local/bin/ldid
-            ldid -S XiuGou.dylib && echo "已用 ldid 签名"
+            ldid -S XiuGou.dylib && echo "已用 ldid 签名" || echo "签名失败，跳过（TrollFools 会重签）"
           else
             echo "拿不到 ldid；TrollStore 注入通常也接受未签名 dylib，继续"
           fi
 
       - name: 上传产物
+        if: always() && hashFiles('XiuGou.dylib') != ''
         uses: actions/upload-artifact@v4
         with:
           name: XiuGou-dylib
