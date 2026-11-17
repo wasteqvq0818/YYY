@@ -148,13 +148,16 @@ static UIWindow *XGHostWindow(void) {
         c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.9 blue:0.55 alpha:1.0];
         c.detailTextLabel.text = @"在战斗界面点这个：扫内存找敌人，血量归零";
     } else if (ip.row == 1) {
-        c.textLabel.text = @"💀 调用 Die（杀所有敌人）";
-        c.textLabel.textColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.3 alpha:1.0];
-        c.detailTextLabel.text = @"找场上 EnemyInstance，调游戏自己的 Die() 方法";
+        BOOL on = XGHPHookInstalled() != 0;
+        c.textLabel.text = on ? @"🔨 血量归零Hook：已装（点此卸载）"
+                              : @"🔨 装血量归零 Hook（推荐）";
+        c.textLabel.textColor = on ? [UIColor colorWithRed:0.4 green:0.95 blue:0.5 alpha:1.0]
+                                   : [UIColor colorWithRed:1.0 green:0.6 blue:0.3 alpha:1.0];
+        c.detailTextLabel.text = @"改 EnemyData.set_mCurrentHP 的函数指针，敌人血量恒为 0";
     } else if (ip.row == 2) {
-        c.textLabel.text = @"🏆 直接触发胜利（Victory）";
+        c.textLabel.text = @"🏆 直接触发胜利（可能崩）";
         c.textLabel.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.3 alpha:1.0];
-        c.detailTextLabel.text = @"调 Labyrinth.Victory()，跳过整场战斗";
+        c.detailTextLabel.text = @"调 Labyrinth.Victory()，之前试过会崩，谨慎";
     } else if (ip.row == 3) {
         c.textLabel.text = @"🔍 扫描方法名";
         c.textLabel.textColor = [UIColor colorWithRed:0.45 green:0.7 blue:1.0 alpha:1.0];
@@ -177,10 +180,13 @@ static UIWindow *XGHostWindow(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
-        XGCallDieAsync();
+        if (XGHPHookInstalled()) {
+            XGRemoveHPHook();
+        } else {
+            XGInstallHPHook();
+        }
         [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
+        [tv reloadData];
     } else if (ip.row == 2) {
         XGForceVictoryAsync();
         [self refreshHeader];
