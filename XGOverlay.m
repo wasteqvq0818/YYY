@@ -16,11 +16,6 @@ static UIButton  *g_ball        = nil;
 static UIWindow  *g_panelWindow = nil;
 static UIWindowScene *g_scene   = nil;
 
-// 外部（TOSHooks.mm）提供
-void XGScanAsync(void);
-int  XGScanState(void);
-const char *XGScanMessage(void);
-
 static void XGDiag(NSString *msg) {
     NSLog(@"[XG-UI] %@", msg);
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], msg];
