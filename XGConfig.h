@@ -122,6 +122,11 @@ void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_in
 
 // dump 游戏的 NSUserDefaults（XiuGou 可能走的是改 plist/偏好这条路）
 // hook 血量 getter：让游戏每次读血量都拿到 0
+void XGAutoKillStart(void);   // 自动过关开关：自动调 EnemyDie（走完整流程，正常掉卡）
+void XGAutoKillStop(void);
+int  XGAutoKillActive(void);
+int  XGAutoKillTotal(void);
+void XGAutoKillTickOnce(void);
 void XGForceVictoryNow(void);   // 直接调 Labyrinth.Victory()
 const char *XGVictoryMsg(void);
 void XGKillAllStart(void);     // 连续杀：每 0.25s 处理一个敌人
