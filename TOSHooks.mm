@@ -921,3 +921,121 @@ void XGSkipStageAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v22 · 精确清空敌人血量
+//
+//  依据 dump.cs（metadata v39 实测）：
+//    EnemyInstance.mData       @ 0xF8  → EnemyData*
+//    EnemyData._mCurrentHP     @ 0x38  → Number{ Decimal }  16 字节
+//    Decimal 布局: lo@+0 mid@+4 hi@+8 flags@+12
+//    EnemyInstance.predictHP   @ 0x38  → float（血条显示）
+//    EnemyInstance._isDead     @ 0x90  → bool
+//    EnemyInstance.cannotDie   @ 0x8A  → bool
+//
+//  之前的版本失败原因：直接扫 EnemyData 改 0x38（命中大量历史对象），
+//  且把 Decimal 当 int64 读。现在改走「EnemyInstance → mData → Decimal 清零」，
+//  并用 klass 指针双向验证，保证改的是真的战斗对象。
+// ============================================================================
+
+static volatile int g_zeroHits = 0, g_zeroChanged = 0;
+static char g_zeroMsg[256] = "未执行";
+
+int  XGZeroHits(void)    { return g_zeroHits; }
+int  XGZeroChanged(void) { return g_zeroChanged; }
+const char *XGZeroMessage(void) { return g_zeroMsg; }
+
+static void *ReadKlass(uintptr_t obj) {
+    void *k = NULL;
+    if (!SafeRead(obj, &k, sizeof(k))) return NULL;
+    return k;
+}
+
+void XGZeroEnemiesAsync(void) {
+    if (g_state == 1) return;
+    g_state = 1;
+    snprintf(g_zeroMsg, sizeof(g_zeroMsg), "精确清血中…");
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!XGI2Init()) { snprintf(g_zeroMsg, sizeof(g_zeroMsg), "il2cpp 未就绪"); g_state = 3; return; }
+        void *kInst = XGI2Class(XG_ENEMY_INSTANCE_CLASS);
+        void *kData = XGI2Class(XG_ENEMY_CLASS);
+        NSLog(@"[XG] klass EnemyInstance=%p EnemyData=%p", kInst, kData);
+        if (!kInst) { snprintf(g_zeroMsg, sizeof(g_zeroMsg), "找不到 EnemyInstance 类"); g_state = 3; return; }
+
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            @autoreleasepool {
+                uint8_t *buf = (uint8_t *)malloc(CHUNK);
+                if (!buf) { snprintf(g_zeroMsg, sizeof(g_zeroMsg), "内存不足"); g_state = 3; return; }
+
+                CFTimeInterval t0 = CFAbsoluteTimeGetCurrent();
+                int hits = 0, changed = 0, verified = 0;
+                char sample[96] = {0};
+
+                for (uintptr_t p = SCAN_START; p + CHUNK < SCAN_END; p += CHUNK) {
+                    if (CFAbsoluteTimeGetCurrent() - t0 > TIME_BUDGET) break;
+                    vm_size_t got = 0;
+                    if (vm_read_overwrite(mach_task_self(), (vm_address_t)p, (vm_size_t)CHUNK,
+                                          (vm_address_t)buf, &got) != KERN_SUCCESS || got < 0x100) continue;
+
+                    for (size_t off = 0; off + 0x100 < (size_t)got; off += 8) {
+                        if (*(void **)(buf + off) != kInst) continue;
+                        uintptr_t inst = p + off;
+                        hits++;
+
+                        // 1. 走 mData 拿 EnemyData*
+                        uintptr_t mData = 0;
+                        if (!SafeRead(inst + XG_ACC_INST_MDATA, &mData, 8) || mData < 0x10000) continue;
+
+                        // 2. 验证 mData 真的是 EnemyData（读对象头比对 klass）
+                        if (kData) {
+                            void *mk = ReadKlass(mData);
+                            if (mk != kData) continue;
+                        }
+                        verified++;
+
+                        // 3. 清空 Decimal（lo/mid/hi/flags 全 0 = 数值 0）
+                        uint8_t zero16[XG_ACC_DECIMAL_SIZE];
+                        memset(zero16, 0, sizeof(zero16));
+                        if (SafeWrite(mData + XG_ACC_DATA_CUR_HP, zero16, sizeof(zero16))) changed++;
+
+                        // 4. 血条显示值也归零（float）
+                        float zf = 0.0f;
+                        SafeWrite(inst + XG_ACC_INST_PREDICT_HP, &zf, 4);
+
+                        // 5. 关掉「打不死」的两个开关
+                        uint8_t b0 = 0;
+                        SafeWrite(inst + XG_ACC_INST_CANNOTDIE, &b0, 1);
+                        SafeWrite(inst + XG_ACC_INST_PREVENT_KILL, &b0, 8);   // 指针置 NULL
+
+                        // 6. 标死
+                        uint8_t b1 = 1;
+                        SafeWrite(inst + XG_ACC_INST_ISDEAD, &b1, 1);
+
+                        if (hits <= 3 && strlen(sample) < 80) {
+                            char t[32];
+                            snprintf(t, sizeof(t), "0x%lx→0x%lx ", (unsigned long)inst, (unsigned long)mData);
+                            strncat(sample, t, sizeof(sample) - strlen(sample) - 1);
+                        }
+                    }
+                }
+                free(buf);
+
+                g_zeroHits = hits;
+                g_zeroChanged = changed;
+                g_state = 2;
+                if (hits == 0) {
+                    snprintf(g_zeroMsg, sizeof(g_zeroMsg), "没找到 EnemyInstance（先打一关再来）");
+                } else if (verified == 0) {
+                    snprintf(g_zeroMsg, sizeof(g_zeroMsg),
+                             "找到 %d 个实例但 mData 验证都没通过（klass 不匹配）", hits);
+                } else {
+                    snprintf(g_zeroMsg, sizeof(g_zeroMsg),
+                             "实例 %d｜验证通过 %d｜已清零 %d", hits, verified, changed);
+                }
+                NSLog(@"[XG] %s  样本: %s", g_zeroMsg, sample);
+            }
+        });
+    });
+}
