@@ -121,6 +121,9 @@ int  XGInstallInlineHooks(void);
 void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_invoke）
 
 // dump 游戏的 NSUserDefaults（XiuGou 可能走的是改 plist/偏好这条路）
+// hook 血量 getter：让游戏每次读血量都拿到 0
+int  XGHookHPGetter(void);
+int  XGHPGetterHooked(void);
 void XGPatchCacheAsync(void);      // 改 RESTORE_CACHE 里的敌人 hp（XiuGou 的做法）
 int  XGPatchEnemyCount(void);
 const char *XGPatchMsg(void);
