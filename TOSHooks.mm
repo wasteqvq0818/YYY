@@ -830,10 +830,14 @@ void XGSkipStageAsync(void) {
     g_state = 1;
     snprintf(g_skipMsg, sizeof(g_skipMsg), "跳关扫描中…");
 
-    int32_t cur   = (int32_t)XG.conf.stageCurrent;   // 当前第几关
-    int32_t total = (int32_t)XG.conf.stageTotal;     // 总共几关
+    int32_t cur   = (int32_t)XG.conf.stageCurrent;
+    int32_t total = (int32_t)XG.conf.stageTotal;
     if (cur <= 0 || total <= 0) { cur = 1; total = 7; }
-    if (cur >= total) { snprintf(g_skipMsg, sizeof(g_skipMsg), "当前关(%d) >= 总关(%d)，先改参数", cur, total); g_state = 3; return; }
+    if (cur >= total) {
+        snprintf(g_skipMsg, sizeof(g_skipMsg), "当前关(%d) >= 总关(%d)，先改参数", cur, total);
+        g_state = 3;
+        return;
+    }
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @autoreleasepool {
@@ -841,10 +845,11 @@ void XGSkipStageAsync(void) {
             if (!buf) { snprintf(g_skipMsg, sizeof(g_skipMsg), "内存不足"); g_state = 3; return; }
 
             CFTimeInterval t0 = CFAbsoluteTimeGetCurrent();
-            int hits = 0, changed = 0;
-            char firstFew[160] = {0};
+            uintptr_t cand[64];
+            int32_t   candDelta[64];
+            int nCand = 0, rawHits = 0;
 
-            for (uintptr_t p = SCAN_START; p + CHUNK < SCAN_END; p += CHUNK) {
+            for (uintptr_t p = SCAN_START; p + CHUNK < SCAN_END && nCand < 64; p += CHUNK) {
                 if (CFAbsoluteTimeGetCurrent() - t0 > TIME_BUDGET) break;
                 vm_size_t got = 0;
                 if (vm_read_overwrite(mach_task_self(), (vm_address_t)p, (vm_size_t)CHUNK,
@@ -854,34 +859,65 @@ void XGSkipStageAsync(void) {
                     int32_t v;
                     memcpy(&v, buf + off, 4);
                     if (v != cur) continue;
-                    int32_t delta = 0;
-                    if (!nearbyHas(buf, got, off, total, &delta)) continue;
+                    rawHits++;
 
-                    hits++;
-                    uintptr_t addr = p + off;
-                    if (hits <= 4 && strlen(firstFew) < 120) {
-                        char t[40];
-                        snprintf(t, sizeof(t), "0x%lx(+%d) ", (unsigned long)addr, delta);
-                        strncat(firstFew, t, sizeof(firstFew) - strlen(firstFew) - 1);
+                    // ★ 强特征：总关数必须紧邻（|delta| <= 8 字节）
+                    //   老教程里显示的 "2/7" 说明这两个数就在同一个结构里相邻存放
+                    ssize_t found = 0;
+                    for (ssize_t d = -8; d <= 8; d += 4) {
+                        if (d == 0) continue;
+                        ssize_t q = (ssize_t)off + d;
+                        if (q < 0 || q + 4 > (ssize_t)got) continue;
+                        int32_t w;
+                        memcpy(&w, buf + q, 4);
+                        if (w == total) { found = d; break; }
                     }
-                    // 把「当前关」改成「总关」→ 游戏认为已打到最后一关
-                    int32_t nv = total;
-                    if (SafeWrite(addr, &nv, 4)) changed++;
+                    if (found == 0) continue;
+
+                    if (nCand < 64) {
+                        cand[nCand] = p + off;
+                        candDelta[nCand] = (int32_t)found;
+                        nCand++;
+                    }
                 }
             }
             free(buf);
 
-            g_skipHits = hits;
+            // 命中太多说明特征还是太宽（比如到处是 1 和 7），放弃写入
+            if (nCand == 0) {
+                g_skipHits = rawHits;
+                g_skipChanged = 0;
+                g_state = 2;
+                snprintf(g_skipMsg, sizeof(g_skipMsg),
+                         "没找到紧邻的 %d/%d（原始命中 %d 处但都不相邻）", cur, total, rawHits);
+                return;
+            }
+            if (nCand > 32) {
+                g_skipHits = nCand;
+                g_skipChanged = 0;
+                g_state = 2;
+                snprintf(g_skipMsg, sizeof(g_skipMsg),
+                         "候选 %d 处太多（特征太宽），为防止写坏内存已放弃", nCand);
+                return;
+            }
+
+            // ★ 限次写入：最多改 8 处
+            int changed = 0, limit = nCand < 8 ? nCand : 8;
+            int32_t nv = total;
+            for (int i = 0; i < limit; i++) {
+                // 写入前二次校验：确认这里确实是 cur
+                int32_t chk = 0;
+                if (!SafeRead(cand[i], &chk, 4) || chk != cur) continue;
+                if (SafeWrite(cand[i], &nv, 4)) changed++;
+            }
+
+            g_skipHits = nCand;
             g_skipChanged = changed;
             g_state = 2;
-            if (hits == 0) {
-                snprintf(g_skipMsg, sizeof(g_skipMsg),
-                         "没找到 %d/%d 这对数值（换个关卡或先打一关再试）", cur, total);
-            } else {
-                snprintf(g_skipMsg, sizeof(g_skipMsg),
-                         "命中 %d 处，已改 %d 处 → %d/%d", hits, changed, total, total);
-            }
-            NSLog(@"[XG] 跳关: %s  样本: %s", g_skipMsg, firstFew);
+            snprintf(g_skipMsg, sizeof(g_skipMsg),
+                     "候选 %d 处，改 %d 处 → %d/%d", nCand, changed, total, total);
+            NSLog(@"[XG] 跳关: %s  首个地址 0x%lx (delta=%d)",
+                  g_skipMsg, (unsigned long)cand[0], candDelta[0]);
         }
     });
 }
