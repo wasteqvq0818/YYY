@@ -71,6 +71,10 @@ extern "C" {
 #define XG_SETTLE_ARGC          0
 #define XG_SETTLE_NS            ""
 #define XG_SETTLE_HOOK_SYMBOL   ""           // 空 = 走 il2cpp
+// 兼容旧代码里的命名
+#define XG_FASTWIN_WIN_METHOD   XG_SETTLE_METHOD
+#define XG_FASTWIN_WIN_ARGC     XG_SETTLE_ARGC
+#define XG_FASTWIN_CLASS        XG_SETTLE_CLASS
 
 // ---- 快速胜利 ----
 #define XG_BATTLE_ROOT_PTR_OFF   0x00000000  // 已废弃：现在通过类单例取，不再硬编码映像偏移
