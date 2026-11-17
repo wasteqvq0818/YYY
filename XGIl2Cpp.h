@@ -56,6 +56,11 @@ int  XGI2DumpMethods(const char *className, const char *nameFilter);
 // 一次性探测配置里关心的所有类
 void XGI2ProbeConfigured(void);
 
+// 把探测结果写到文件（iOS 非越狱设备读日志困难，落盘最省事）
+// path 传 NULL 时默认写 /var/mobile/Documents/XG_probe.txt，失败回退沙箱 Documents
+// 返回写入的字节数
+int XGI2ProbeToFile(const char *path);
+
 // 调试：把所有类名写到 path（一行一个），用于离线 grep
 int XGI2DumpClassNames(const char *path);
 
