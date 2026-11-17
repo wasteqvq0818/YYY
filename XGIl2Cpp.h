@@ -64,6 +64,10 @@ void XGI2DumpStaticFields(const char *className);
 // 静态字段数据区指针（静态字段用它 + offset）
 void *XGI2StaticData(const char *className);
 
+// 取对象的类名 / 命名空间（诊断用）
+const char *XGI2ClassName(void *klass);
+const char *XGI2ClassNamespace(void *klass);
+
 // 调方法：obj 传实例（静态方法传 NULL），params 是参数地址数组
 // 返回返回值指针或 NULL，exc 非空表示托管异常
 void *XGI2Invoke(void *methodInfo, void *obj, void **params, void **exc);
