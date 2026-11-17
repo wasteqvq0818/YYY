@@ -118,6 +118,10 @@ int  XGInstallDeadHook(void);
 void XGRemoveDeadHook(void);
 int  XGDeadHookInstalled(void);
 int  XGInstallInlineHooks(void);
+void XGKillBattleZoneAsync(void);   // 终版：清血 + 触发死亡判定（用真实实例）
+int  XGKillChanged(void);
+int  XGKillRan(void);
+const char *XGKillMessage(void);
 void XGZeroBattleZoneAsync(void);   // 终版：走 Labyrinth.BattleZoneEnemy 静态链
 int  XGZBHits(void);
 int  XGZBChanged(void);
