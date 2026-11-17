@@ -69,6 +69,11 @@ void XGScanMethodsAsync(void);   // 扫描方法名（找胜利/结算函数）
 void XGCallDieAsync(void);       // 对场上所有敌人调用 Die()
 void XGForceVictoryAsync(void);  // 直接调用 Labyrinth.Victory()
 const char *XGLastCallResult(void);
+
+// 装/卸「血量归零」hook（改 MethodInfo 函数指针，不碰代码段）
+int  XGInstallHPHook(void);
+void XGRemoveHPHook(void);
+int  XGHPHookInstalled(void);
 int  XGScanState(void);
 const char *XGScanMessage(void);
 int  XGLastKillCount(void);
