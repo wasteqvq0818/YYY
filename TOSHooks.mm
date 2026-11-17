@@ -1613,3 +1613,173 @@ void XGDumpPrefsAsync(void) {
         }
     });
 }
+
+
+// ============================================================================
+//  v32 · 改 RESTORE_CACHE 里的敌人血量（XiuGou 的真正做法）
+//
+//  证据（XG_prefs.txt 实测）：
+//    NSUserDefaults 里有个 key: RESTORE_CACHE
+//    值是 JSON 字符串，结构：
+//      { "CurrentFloorId":12960, ...,
+//        "FloorWavesData":[
+//          { "enemies":[ { "monsterId":1831,
+//                          "extras":{ "attack":100, "defense":10,
+//                                     "hp":500000000000,   ← 5000 亿
+//                                     "attackDuration":9 } } ] } ] }
+//    这四个数字和游戏截图完全一致（朱雀 CD9 / 5000億 / 100 / 10）。
+//
+//  所以「直接胜利」不需要碰内存里的敌人对象，只要把这份缓存里的 hp 改成 1，
+//  游戏下次按缓存重建战斗时，敌人从源头就是 1 点血 —— 一击必杀。
+//  这也解释了 XiuGou 为什么只读内存不写内存：它写的是文件。
+// ============================================================================
+
+static volatile int g_patchEnemies = 0;
+static char g_patchMsg[384] = "未执行";
+
+int  XGPatchEnemyCount(void) { return g_patchEnemies; }
+const char *XGPatchMsg(void) { return g_patchMsg; }
+
+static NSString *const kRestoreKey = @"RESTORE_CACHE";
+
+// 递归遍历 JSON，把所有 extras.hp 改成 targetHP，统计改了几个
+static int patchHPInJSON(id node, long long targetHP) {
+    int n = 0;
+    if ([node isKindOfClass:[NSMutableDictionary class]]) {
+        NSMutableDictionary *d = (NSMutableDictionary *)node;
+        // 命中一个 "extras" 字典
+        NSMutableDictionary *ex = d[@"extras"];
+        if ([ex isKindOfClass:[NSMutableDictionary class]] && ex[@"hp"]) {
+            ex[@"hp"] = @(targetHP);
+            n++;
+        }
+        for (id k in [d allKeys]) {
+            id v = d[k];
+            if ([v isKindOfClass:[NSMutableDictionary class]] ||
+                [v isKindOfClass:[NSMutableArray class]]) {
+                n += patchHPInJSON(v, targetHP);
+            }
+        }
+    } else if ([node isKindOfClass:[NSMutableArray class]]) {
+        NSMutableArray *a = (NSMutableArray *)node;
+        for (id v in a) {
+            if ([v isKindOfClass:[NSMutableDictionary class]] ||
+                [v isKindOfClass:[NSMutableArray class]]) {
+                n += patchHPInJSON(v, targetHP);
+            }
+        }
+    }
+    return n;
+}
+
+// 统计缓存里的敌人信息（诊断用）
+static void summarizeJSON(id node, NSMutableString *out, int depth) {
+    if (depth > 6 || out.length > 3000) return;
+    if ([node isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *d = node;
+        NSDictionary *ex = d[@"extras"];
+        if ([ex isKindOfClass:[NSDictionary class]] && ex[@"hp"]) {
+            [out appendFormat:@"  enemy monsterId=%@ hp=%@ atk=%@ def=%@ cd=%@\n",
+             d[@"monsterId"] ?: @"?", ex[@"hp"], ex[@"attack"] ?: @"?",
+             ex[@"defense"] ?: @"?", ex[@"attackDuration"] ?: @"?"];
+        }
+        for (id k in d) {
+            id v = d[k];
+            if ([v isKindOfClass:[NSDictionary class]] || [v isKindOfClass:[NSArray class]])
+                summarizeJSON(v, out, depth + 1);
+        }
+    } else if ([node isKindOfClass:[NSArray class]]) {
+        for (id v in (NSArray *)node) {
+            if ([v isKindOfClass:[NSDictionary class]] || [v isKindOfClass:[NSArray class]])
+                summarizeJSON(v, out, depth + 1);
+        }
+    }
+}
+
+void XGRestoreCacheAsync(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @autoreleasepool {
+            NSString *s = [[NSUserDefaults standardUserDefaults] stringForKey:kRestoreKey];
+            if (!s.length) { snprintf(g_patchMsg, sizeof(g_patchMsg), "RESTORE_CACHE 不存在/为空"); return; }
+
+            NSData *d = [s dataUsingEncoding:NSUTF8StringEncoding];
+            NSError *err = nil;
+            id json = [NSJSONSerialization JSONObjectWithData:d
+                                                      options:NSJSONReadingMutableContainers
+                                                        error:&err];
+            if (!json) {
+                snprintf(g_patchMsg, sizeof(g_patchMsg), "JSON 解析失败: %s",
+                         err.localizedDescription.UTF8String ?: "?");
+                return;
+            }
+
+            NSMutableString *rep = [NSMutableString string];
+            [rep appendFormat:@"===== RESTORE_CACHE 解析 (%.1f KB) =====\n", s.length / 1024.0];
+            if ([json isKindOfClass:[NSDictionary class]]) {
+                NSDictionary *dd = json;
+                [rep appendFormat:@"ZoneId=%@ StageId=%@ FloorId=%@ Version=%@\n",
+                 dd[@"CurrentZoneId"] ?: @"?", dd[@"CurrentStageId"] ?: @"?",
+                 dd[@"CurrentFloorId"] ?: @"?", dd[@"RestoreVersion"] ?: @"?"];
+            }
+            [rep appendString:@"敌人列表:\n"];
+            summarizeJSON(json, rep, 0);
+
+            DLog("%s", rep.UTF8String);
+            snprintf(g_patchMsg, sizeof(g_patchMsg), "缓存已解析，详见 XG_diag.txt");
+        }
+    });
+}
+
+void XGPatchCacheAsync(void) {
+    snprintf(g_patchMsg, sizeof(g_patchMsg), "改缓存中…");
+    DLog("\n===== 改 RESTORE_CACHE %s =====", [[NSDate date] description].UTF8String);
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool {
+            NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+            NSString *s = [ud stringForKey:kRestoreKey];
+            if (!s.length) {
+                snprintf(g_patchMsg, sizeof(g_patchMsg), "RESTORE_CACHE 不存在（先进一次关卡）");
+                DLog("%s", g_patchMsg);
+                return;
+            }
+
+            NSData *d = [s dataUsingEncoding:NSUTF8StringEncoding];
+            NSError *err = nil;
+            id json = [NSJSONSerialization JSONObjectWithData:d
+                                                      options:NSJSONReadingMutableContainers
+                                                        error:&err];
+            if (!json) {
+                snprintf(g_patchMsg, sizeof(g_patchMsg), "JSON 解析失败");
+                DLog("JSON 解析失败: %s", err.localizedDescription.UTF8String ?: "?");
+                return;
+            }
+
+            // 改所有 extras.hp → 1
+            int n = patchHPInJSON(json, 1);
+            DLog("命中 extras.hp 共 %d 处，已改为 1", n);
+
+            if (n == 0) {
+                snprintf(g_patchMsg, sizeof(g_patchMsg), "缓存里没找到 extras.hp");
+                return;
+            }
+
+            NSData *out = [NSJSONSerialization dataWithJSONObject:json options:0 error:&err];
+            if (!out) {
+                snprintf(g_patchMsg, sizeof(g_patchMsg), "序列化失败");
+                return;
+            }
+            NSString *ns = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
+            [ud setObject:ns forKey:kRestoreKey];
+            BOOL ok = [ud synchronize];
+            DLog("写回 %s，新长度 %.1f KB", ok ? "成功" : "失败", ns.length / 1024.0);
+
+            g_patchEnemies = n;
+            snprintf(g_patchMsg, sizeof(g_patchMsg),
+                     "已把 %d 个敌人的 hp 改成 1（%s）→ 重进关卡生效",
+                     n, ok ? "写回成功" : "写回失败");
+            DLog("结果: %s", g_patchMsg);
+            NSLog(@"[XG] %s", g_patchMsg);
+        }
+    });
+}
