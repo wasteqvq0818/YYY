@@ -92,7 +92,8 @@ static UIWindow *XGHostWindow(void) {
     UIColor *color = hooked ? [UIColor colorWithRed:0.4 green:0.9 blue:0.5 alpha:1.0]
                             : [UIColor colorWithWhite:0.75 alpha:1.0];
 
-    const char *sm = XGSkipHits() > 0 ? XGSkipMessage() : XGScanMessage();
+    const char *sm = XGZeroHits() > 0 ? XGZeroMessage()
+                     : (XGSkipHits() > 0 ? XGSkipMessage() : XGScanMessage());
     NSString *text = [NSString stringWithFormat:@"%@\n计数：HP %d｜isDead %d｜CheckDie %d｜验证 %d\n%@",
         stateLine, XGCntCurHP2(), XGCntIsDead2(), XGCntCheckDie2(), XGCntVerify2(),
         (sm && sm[0]) ? [NSString stringWithUTF8String:sm] : @""];
@@ -126,7 +127,7 @@ static UIWindow *XGHostWindow(void) {
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
-    return s == 0 ? 5 : 2;
+    return s == 0 ? 6 : 2;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -148,20 +149,21 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d → 直接过关）",
-                            XG.conf.stageCurrent, XG.conf.stageTotal];
+        c.textLabel.text = @"💥 清空敌人血量（精确）";
         c.textLabel.textColor = [UIColor colorWithRed:0.35 green:0.95 blue:0.55 alpha:1.0];
-        c.detailTextLabel.text = @"把「当前关」改成「总关数」，游戏认为已打到最后一关";
+        c.detailTextLabel.text = @"EnemyInstance+0xF8 → EnemyData+0x38 的 Decimal 清零";
     } else if (ip.row == 1) {
+        c.textLabel.text = [NSString stringWithFormat:@"⏭ 跳关（%d/%d）",
+                            XG.conf.stageCurrent, XG.conf.stageTotal];
+        c.detailTextLabel.text = @"把当前关改成总关数";
+    } else if (ip.row == 2) {
         BOOL on = XGInlineCount() > 0;
         c.textLabel.text = on ? @"🔨 inline hook 已装" : @"🔨 装 inline hook（备用）";
-        c.textLabel.textColor = on ? [UIColor colorWithRed:0.4 green:0.95 blue:0.5 alpha:1.0]
-                                   : [UIColor colorWithWhite:0.8 alpha:1.0];
-        c.detailTextLabel.text = @"改函数机器码（跳关无效时再试这个）";
-    } else if (ip.row == 2) {
-        c.textLabel.text = @"⚡ 扫描并清场";
-        c.detailTextLabel.text = @"旧方案（改敌人血量）";
+        c.detailTextLabel.text = @"改函数机器码";
     } else if (ip.row == 3) {
+        c.textLabel.text = @"⚡ 扫描并清场（旧方案）";
+        c.detailTextLabel.text = @"按旧偏移改，可能命中历史对象";
+    } else if (ip.row == 4) {
         c.textLabel.text = @"🏆 直接触发胜利（可能崩）";
         c.detailTextLabel.text = @"调 Labyrinth.Victory()";
     } else {
@@ -196,19 +198,24 @@ static UIWindow *XGHostWindow(void) {
     }
 
     if (ip.row == 0) {
-        XGSkipStageAsync();
+        XGZeroEnemiesAsync();
         [self refreshHeader];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(16 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self refreshHeader]; [tv reloadData]; });
     } else if (ip.row == 1) {
+        XGSkipStageAsync();
+        [self refreshHeader];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self refreshHeader]; });
+    } else if (ip.row == 2) {
         if (XGInlineCount() == 0) XGInstallInlineHooks();
         [self refreshHeader]; [tv reloadData];
-    } else if (ip.row == 2) {
+    } else if (ip.row == 3) {
         XGScanAsync();
         [self refreshHeader];
-    } else if (ip.row == 3) {
+    } else if (ip.row == 4) {
         XGForceVictoryAsync();
         [self refreshHeader];
     } else {
