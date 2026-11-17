@@ -2588,3 +2588,112 @@ void XGAutoKillStop(void) {
     DLog("===== 自动过关关闭（本次处理 %d 个）=====", g_autoKilled);
     NSLog(@"[XG] 自动过关已关闭");
 }
+
+
+// ============================================================================
+//  v41 · 按老教程的「关卡值 / 跳关值」思路
+//
+//  社区文献（神魔之塔 6.x~8.x 教程）：
+//    「关卡数就是总共几关，跳关值就是你在第几关，
+//      最明显就在 2/50、5/50」
+//    「把关卡值改 1 → 打一关就胜利；或改跳关值 7/7 → 下一回合就胜利」
+//    「还要配合奖励值改成关卡数量，才能拿完所有卡片」= 完美跳关
+//
+//  dump.cs 里 Labyrinth 对应的字段：
+//    StartWaveToDisplayInGameMenu @0xB8   int   「2/50」的相关起点
+//    displayTotalWave             @0xBC   int   「50」这个总波数
+//    displayCurrentWaveIndex      @0x128  Dictionary<int,int>
+//
+//  先把它俩的真实值 dump 出来，确认哪个是「2」哪个是「50」，
+//  然后再决定改哪个。
+// ============================================================================
+
+static char g_waveMsg[384] = "未执行";
+const char *XGWaveMsg(void) { return g_waveMsg; }
+
+// 拿 Labyrinth 实例（EnemyInstance.mLab 静态字段）
+static uintptr_t getLabyrinth(void) {
+    uintptr_t lab = 0;
+    if (XGI2StaticFieldValue(XG_ENEMY_INSTANCE_CLASS, "mLab", &lab, 8) && lab > 0x10000) return lab;
+    return 0;
+}
+
+void XGWaveProbe(void) {
+    snprintf(g_waveMsg, sizeof(g_waveMsg), "读取中…");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (!XGI2Init()) { snprintf(g_waveMsg, sizeof(g_waveMsg), "il2cpp 未就绪"); return; }
+            uintptr_t lab = getLabyrinth();
+            if (!lab) { snprintf(g_waveMsg, sizeof(g_waveMsg), "拿不到 Labyrinth 实例"); return; }
+
+            int32_t vB8 = -1, vBC = -1, vD8 = -1, vDC = -1, vE8 = -1;
+            SafeRead(lab + 0xB8, &vB8, 4);   // StartWaveToDisplayInGameMenu
+            SafeRead(lab + 0xBC, &vBC, 4);   // displayTotalWave
+            uint8_t vD8b = 0;  SafeRead(lab + 0xD8, &vD8b, 1);  // isEnteringNextWave
+            SafeRead(lab + 0xDC, &vDC, 4);   // currentGamePhase
+            SafeRead(lab + 0xE8, &vE8, 4);   // _startDamageEnemy...CalledWave
+
+            // 战场敌人与总敌人数
+            uintptr_t list = 0; int32_t cnt = -1;
+            if (XGI2StaticFieldValue(XG_LAB_CLASS, "BattleZoneEnemy", &list, 8) && list > 0x10000)
+                SafeRead(list + XG_ACC_LIST_SIZE, &cnt, 4);
+            int32_t totalEnemy = -1;
+            uintptr_t fp = XGI2StaticFieldPtr(XG_LAB_CLASS, "totalBattleZoneEnemy");
+            if (fp) SafeRead(fp, &totalEnemy, 4);
+
+            DLog("\n===== 波次字段 %s =====", [[NSDate date] description].UTF8String);
+            DLog("Labyrinth 实例 = 0x%lx", (unsigned long)lab);
+            DLog("  StartWaveToDisplayInGameMenu @0xB8 = %d", vB8);
+            DLog("  displayTotalWave             @0xBC = %d   ← 界面『X/N』的 N", vBC);
+            DLog("  isEnteringNextWave           @0xD8 = %d", vD8b);
+            DLog("  currentGamePhase             @0xDC = %d", vDC);
+            DLog("  _startDamageEnemy...Wave     @0xE8 = %d", vE8);
+            DLog("  BattleZoneEnemy count              = %d", cnt);
+            DLog("  totalBattleZoneEnemy               = %d", totalEnemy);
+            // 实例字段 dump（0xB0~0xF0，含指针，帮助定位）
+            DumpMem(lab + 0xA8, 0x50, "Labyrinth+0xA8");
+
+            snprintf(g_waveMsg, sizeof(g_waveMsg),
+                     "总波数=%d 起点=%d 当前阶段=%d 敌人=%d",
+                     vBC, vB8, vDC, cnt);
+        }
+    });
+}
+
+// 关卡值改成 1：让游戏认为这一关只有 1 波
+void XGSetTotalWaveOne(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            uintptr_t lab = getLabyrinth();
+            if (!lab) { snprintf(g_waveMsg, sizeof(g_waveMsg), "拿不到 Labyrinth"); return; }
+            int32_t before = -1;
+            SafeRead(lab + 0xBC, &before, 4);
+            int32_t one = 1;
+            BOOL ok = SafeWrite(lab + 0xBC, &one, 4);
+            int32_t after = -1;
+            SafeRead(lab + 0xBC, &after, 4);
+            DLog("[关卡值] displayTotalWave: %d -> %d (%s)", before, after, ok ? "写入成功" : "失败");
+            snprintf(g_waveMsg, sizeof(g_waveMsg), "总波数 %d → %d", before, after);
+        }
+    });
+}
+
+// 跳关值改到末尾：把显示起点推到总波数
+void XGJumpToLastWave(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            uintptr_t lab = getLabyrinth();
+            if (!lab) { snprintf(g_waveMsg, sizeof(g_waveMsg), "拿不到 Labyrinth"); return; }
+            int32_t total = -1, startB = -1;
+            SafeRead(lab + 0xBC, &total, 4);
+            SafeRead(lab + 0xB8, &startB, 4);
+            if (total <= 0) { snprintf(g_waveMsg, sizeof(g_waveMsg), "总波数无效(%d)", total); return; }
+            int32_t target = total;           // 推到最后一波 → 显示 N/N
+            SafeWrite(lab + 0xB8, &target, 4);
+            int32_t after = -1;
+            SafeRead(lab + 0xB8, &after, 4);
+            DLog("[跳关值] StartWave: %d -> %d (总波数 %d)", startB, after, total);
+            snprintf(g_waveMsg, sizeof(g_waveMsg), "跳关值 %d → %d/%d", startB, after, total);
+        }
+    });
+}
