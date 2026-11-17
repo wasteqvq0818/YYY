@@ -54,11 +54,10 @@ jobs:
           SDK="$HOME/sdks/iPhoneOS16.5.sdk"
 
           # 先单独编 C 文件（TOSBoard.c 是 C99，不能当 C++ 编）
-          clang -target arm64-apple-ios15.0 -isysroot "$SDK" -O2 -c TOSBoard.c -o TOSBoard.o
-          echo "TOSBoard.o 编好"
 
           # ObjC / ObjC++ 源文件
-          SRCS=$(ls *.m *.mm 2>/dev/null)
+          # 精简版只编这四个（XGFastWin.m / XGSettlement.m / TouchInjector.m 已废弃）
+          SRCS="TOSHooks.mm XGConfig.m XGOverlay.m XGIl2Cpp.m"
           echo "源文件: $SRCS"
 
           clang++ -dynamiclib \
@@ -76,7 +75,7 @@ jobs:
             -framework QuartzCore \
             -framework CoreGraphics \
             -install_name "@executable_path/Frameworks/XiuGou.dylib" \
-            $SRCS TOSBoard.o \
+            $SRCS \
             -o XiuGou.dylib
 
           echo "--- 产物 ---"
