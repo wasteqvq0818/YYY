@@ -559,33 +559,90 @@ static int hookOne(void *mi, void *repl, void **origOut) {
     return SafeWrite((uintptr_t)slot, &r, sizeof(r)) ? 1 : 0;
 }
 
-// 装全套 hook：HP setter（计数版）+ isDead + CheckDie
+// ============================================================================
+//  v18：对所有同名类都装 hook
+//
+//  v17 的计数全是 0，原因基本锁定：游戏有多个程序集，`EnemyData` 这种类名
+//  存在 3~6 份（探测输出里能看到同名块重复出现）。
+//  XGI2Class 只返回找到的第一个，很可能就是没人用的空壳。
+//  所以这里遍历所有同名类，逐个装 hook。
+//
+//  同时装一个「验证 hook」：给每份 EnemyInstance 的 UpdateRound 装计数版，
+//  它每回合必被调用。如果连它的计数都是 0，说明方法指针 hook 这条路本身无效。
+// ============================================================================
+
+#define MAX_SAME 16
+
+static void      *g_miList[MAX_SAME * 4];
+static void      *g_origList[MAX_SAME * 4];
+static int        g_listN = 0;
+static volatile int g_cntVerify = 0;      // 验证 hook（UpdateRound）
+
+int XGCntVerify(void) { return g_cntVerify; }
+
+static uint8_t my_verify(void *self) {
+    g_cntVerify++;
+    return 0;
+}
+
+static void hookOneInto(void *mi, void *repl) {
+    if (!mi || g_listN >= MAX_SAME * 4) return;
+    void **slot = (void **)mi;
+    g_miList[g_listN]   = mi;
+    g_origList[g_listN] = *slot;
+    void *r = repl;
+    if (SafeWrite((uintptr_t)slot, &r, sizeof(r))) g_listN++;
+}
+
 int XGInstallDeadHook(void) {
     if (!XGI2Init()) { snprintf(g_callMsg, sizeof(g_callMsg), "il2cpp 未就绪"); return 0; }
 
-    int n = 0;
-    // 1. HP setter 换成计数版
-    if (g_miCurHP) n += hookOne(g_miCurHP, (void *)my2_setCurrentHP, &g_origCurHP);
-    if (g_miMaxHP) n += hookOne(g_miMaxHP, (void *)my2_setMaxHP,     &g_origMaxHP);
+    XGRemoveDeadHook();          // 先清干净，允许重复点击
+    g_cntCurHP = g_cntMaxHP = g_cntIsDead = g_cntCheckDie = g_cntVerify = 0;
 
-    // 2. isDead / CheckDie
-    g_miIsDead   = XGI2MethodInfo(XG_ENEMY_INSTANCE_CLASS, "get_isDead", 0);
-    g_miCheckDie = XGI2MethodInfo(XG_ENEMY_INSTANCE_CLASS, "CheckDie", 0);
-    NSLog(@"[XG] mi isDead=%p CheckDie=%p", g_miIsDead, g_miCheckDie);
-    if (g_miIsDead)   n += hookOne(g_miIsDead,   (void *)my_get_isDead, &g_origIsDead);
-    if (g_miCheckDie) n += hookOne(g_miCheckDie, (void *)my_CheckDie,   &g_origCheckDie);
+    void *classes[MAX_SAME];
+    int nCls = 0, hooked = 0;
 
-    g_deadHookOn = (n > 0);
-    snprintf(g_callMsg, sizeof(g_callMsg), "装了 %d 个 hook（进战斗看计数）", n);
+    // ---- 1. 对所有 EnemyData 副本装 HP setter hook ----
+    nCls = XGI2FindAllClasses(XG_ENEMY_CLASS, classes, MAX_SAME);
+    NSLog(@"[XG] EnemyData 副本数 = %d", nCls);
+    for (int i = 0; i < nCls; i++) {
+        void *k = classes[i];
+        if (!k) continue;
+        void *mi1 = XGI2MethodInfoOfClass(k, "set_mCurrentHP", 1);
+        void *mi2 = XGI2MethodInfoOfClass(k, "set_mMaxHP", 1);
+        if (mi1) { hookOneInto(mi1, (void *)my2_setCurrentHP); hooked++; }
+        if (mi2) { hookOneInto(mi2, (void *)my2_setMaxHP);     hooked++; }
+    }
+
+    // ---- 2. 对所有 EnemyInstance 副本装死亡判定 + 验证 hook ----
+    nCls = XGI2FindAllClasses(XG_ENEMY_INSTANCE_CLASS, classes, MAX_SAME);
+    NSLog(@"[XG] EnemyInstance 副本数 = %d", nCls);
+    for (int i = 0; i < nCls; i++) {
+        void *k = classes[i];
+        if (!k) continue;
+        void *miDead  = XGI2MethodInfoOfClass(k, "get_isDead", 0);
+        void *miCheck = XGI2MethodInfoOfClass(k, "CheckDie", 0);
+        void *miVerify = XGI2MethodInfoOfClass(k, "UpdateRound", 0);
+        if (!miVerify) miVerify = XGI2MethodInfoOfClass(k, "UpdateRoundDisplay", 0);
+
+        if (miDead)  { hookOneInto(miDead,  (void *)my_get_isDead); hooked++; }
+        if (miCheck) { hookOneInto(miCheck, (void *)my_CheckDie);   hooked++; }
+        if (miVerify) hookOneInto(miVerify, (void *)my_verify);      // 只计数不改行为意义
+    }
+
+    g_deadHookOn = (hooked > 0);
+    snprintf(g_callMsg, sizeof(g_callMsg),
+             "装了 %d 个 hook（EnemyData %d 副本 / EnemyInstance %d 副本）",
+             hooked, 0, nCls);
     NSLog(@"[XG] %s", g_callMsg);
-    return n;
+    return hooked;
 }
 
 void XGRemoveDeadHook(void) {
-    if (g_miCurHP && g_origCurHP)         SafeWrite((uintptr_t)g_miCurHP, &g_origCurHP, 8);
-    if (g_miMaxHP && g_origMaxHP)         SafeWrite((uintptr_t)g_miMaxHP, &g_origMaxHP, 8);
-    if (g_miIsDead && g_origIsDead)       SafeWrite((uintptr_t)g_miIsDead, &g_origIsDead, 8);
-    if (g_miCheckDie && g_origCheckDie)   SafeWrite((uintptr_t)g_miCheckDie, &g_origCheckDie, 8);
+    for (int i = 0; i < g_listN; i++) {
+        if (g_miList[i] && g_origList[i]) SafeWrite((uintptr_t)g_miList[i], &g_origList[i], 8);
+    }
+    g_listN = 0;
     g_deadHookOn = 0;
-    snprintf(g_callMsg, sizeof(g_callMsg), "hook 已卸载");
 }
