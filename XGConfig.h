@@ -122,6 +122,8 @@ void XGCallEnemyDieAsync(void);   // 直接调 methodPointer（绕过 runtime_in
 
 // dump 游戏的 NSUserDefaults（XiuGou 可能走的是改 plist/偏好这条路）
 // hook 血量 getter：让游戏每次读血量都拿到 0
+void XGClearBattleZone(void);   // 把 BattleZoneEnemy 的 size 置 0（游戏据此判定没有敌人）
+const char *XGClearMsg(void);
 void XGMonitorStart(void);     // 开始监视（记录游戏状态变化，供对比 XiuGou）
 void XGMonitorStop(void);
 int  XGMonitorActive(void);
