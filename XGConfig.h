@@ -58,6 +58,7 @@ const char *XGFeatureName(XGFeature f);
 // 由 TOSHooks.mm 提供（放在这个带 extern "C" 保护的头里，
 // 避免 XGOverlay.m(C) 与 TOSHooks.mm(ObjC++) 之间符号名不匹配）
 void XGScanAsync(void);
+void XGScanMethodsAsync(void);   // 扫描方法名（找胜利/结算函数）
 int  XGScanState(void);
 const char *XGScanMessage(void);
 int  XGLastKillCount(void);
