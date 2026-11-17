@@ -268,6 +268,15 @@ void XGI2DumpStaticFields(const char *className) {
 }
 
 // ---- 方法入口 ----
+// 返回 MethodInfo*（不是它首字段里的函数指针）——
+// 改 MethodInfo 首字段 = IL2CPP 特有的 hook 方式：不动代码段，只改 8 字节数据
+void *XGI2MethodInfo(const char *className, const char *method, int argc) {
+    if (!XGI2Init() || !p_class_get_method_from_name) return NULL;
+    Il2CppClass *k = XGI2Class(className);
+    if (!k) return NULL;
+    return (void *)p_class_get_method_from_name(k, method, argc);
+}
+
 void *XGI2Method(const char *className, const char *method, int argc) {
     if (!XGI2Init() || !p_class_get_method_from_name) return NULL;
     Il2CppClass *k = XGI2Class(className);
